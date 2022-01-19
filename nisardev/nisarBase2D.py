@@ -6,7 +6,7 @@ Created on Mon Feb 17 14:37:54 2020
 @author: ian
 """
 from abc import ABCMeta, abstractmethod
-from nisarfunc import myError
+from nisardev import myError
 import numpy as np
 import functools
 import xarray as xr

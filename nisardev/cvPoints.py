@@ -10,7 +10,7 @@ import numpy as np
 import pyproj
 import functools
 import matplotlib.pylab as plt
-from nisarfunc import myError
+from nisardev import myError
 from IPython.display import Markdown as md
 
 

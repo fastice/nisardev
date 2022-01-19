@@ -8,8 +8,8 @@ Created on Mon Feb 10 11:08:15 2020
 
 # geoimage.py
 import numpy as np
-from nisarfunc import readGeoTiff
-from nisarfunc import nisarBase2D, parseDatesFromMeta, parseDatesFromDirName
+from nisardev import readGeoTiff
+from nisardev import nisarBase2D, parseDatesFromMeta, parseDatesFromDirName
 import os
 from datetime import datetime
 import xarray as xr
