@@ -196,7 +196,7 @@ class nisarVel(nisarBase2D):
         '''
         self.variables = self.myVariables(useVelocity, useErrors, noSpeed)
         self.readXR(fileNameBase, url=url)
-        if useVelocity:
+        if noSpeed:
             self.vv = np.sqrt(np.square(self.vx) + np.square(self.vy))
         self.fileNameBase = fileNameBase  # save filenameBase
 
