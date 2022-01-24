@@ -8,15 +8,16 @@ Created on Mon Feb 10 11:08:15 2020
 
 # geoimage.py
 import numpy as np
-from nisardev import readGeoTiff
 from nisardev import nisarBase2D, parseDatesFromMeta, parseDatesFromDirName
 import os
 from datetime import datetime
-import xarray as xr
+# import xarray as xr
+# import rioxarray
 import matplotlib.pylab as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import math
 from osgeo import gdal
+# import dask
 
 
 class nisarVel(nisarBase2D):
@@ -33,7 +34,8 @@ class nisarVel(nisarBase2D):
     plotFontSize = 15  # Font size for plots
     legendFontSize = 15  # Font size for legends
 
-    def __init__(self, vx=None, vy=None, v=None, ex=None, ey=None, e=None,
+    def __init__(self,
+                 vx=None, vy=None, v=None, ex=None, ey=None, e=None,
                  sx=None, sy=None, x0=None, y0=None, dx=None, dy=None,
                  epsg=None, useXR=False, verbose=True):
         '''
@@ -79,6 +81,8 @@ class nisarVel(nisarBase2D):
         nisarBase2D.__init__(self, sx=sx, sy=sy, x0=x0, y0=y0, dx=dx, dy=dy,
                              epsg=epsg, useXR=useXR)
         self.vx, self.vy, self.vv, self.ex, self.ey = vx, vy, v, ex, ey
+        self.variables = None
+        self.xr = None
         self.vxInterp, self.vyInterp, self.vvInterp = None, None, None
         self.exInterp, self.eyInterp = None, None
         self.verbose = verbose
@@ -110,12 +114,13 @@ class nisarVel(nisarBase2D):
             myVars += ['vv']
         if useErrors:
             myVars += ['ex', 'ey']
+        self.variables = myVars
         return myVars
 
     # ------------------------------------------------------------------------
     # Interpolation routines - to populate abstract methods from nisarBase2D
     # ------------------------------------------------------------------------
-    def _setupInterp(self, useVelocity=True, useErrors=False):
+    def _setupInterp(self):
         '''
         Setup interpolaters for velocity (vx,vy for useVelocity) and
         error (ex,ey for useErrors).
@@ -130,10 +135,10 @@ class nisarVel(nisarBase2D):
         None.
         '''
         # select variables
-        myVars = self.myVariables(useVelocity, useErrors)
-        self._setupInterpolator(myVars)
+        # myVars = self.myVariables(useVelocity, useErrors)
+        self._setupInterpolator(self.variables)
 
-    def interp(self, x, y, useVelocity=True, useErrors=False, noSpeed=False):
+    def interp(self, x, y):
         '''
         Call appropriate interpolation method to interpolate myVars at x, y
         points.
@@ -144,58 +149,25 @@ class nisarVel(nisarBase2D):
             DESCRIPTION.
         y : nparray
             DESCRIPTION.
-        useVelocity : bool, optional
-            Interpolate velocity if True. The default is True.
-        useErrors : bool, optional
-            Interpolate errors if True. The default is False.
-        noSpeed : bool, optional
-            Skip interpolate of speed if True. The default is False.
         Returns
         -------
         npArray
             interpolate results for [nbands, npts].
         '''
         # determine velocity variables to interp
-        myVars = self.myVariables(useVelocity, useErrors, noSpeed=noSpeed)
         # Set up interpolator if not already done
-        for myVar in myVars:
+        for myVar in self.variables:
             if getattr(self, f'{myVar}Interp') is None:
-                self._setupInterp(useVelocity=useVelocity, useErrors=useErrors)
+                self._setupInterp()
                 break  # One call will setup all myVars
-        return self.interpGeo(x, y, myVars)
+        return self.interpGeo(x, y, self.variables)
 
     # ------------------------------------------------------------------------
     # I/O Routines
     # ------------------------------------------------------------------------
 
-    def dataFileNames(self, fileNameBase, myVars):
-        '''
-        Compute the file names that need to be read. Appends tif.
-        Parameters
-        ----------
-        fileNameBase : str
-            FileNameBase should be of the form
-            pattern.*.abc or pattern*.
-            The wildcard (*) will be filled with the values in myVars
-            e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
-        myVars : list of str
-            list of variable names as strings, e.g. ['vx',...].
-        Returns
-        -------
-        fileNames : ['str'...]
-            List of filenames.
-        '''
-        #
-        fileNames = []
-        if '*' not in fileNameBase:  # in this case append myVar as suffix
-            fileNameBase = f'{fileNameBase}.*'
-        # Form names
-        for myVar in myVars:
-            fileNames.append(f'{fileNameBase.replace("*", myVar)}.tif')
-        return fileNames
-
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
-                         noSpeed=True, useXR=False):
+                         noSpeed=True, url=False):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -218,72 +190,32 @@ class nisarVel(nisarBase2D):
             Interpolate errors if True. The default is False.
         noSpeed : bool, optional
             Skip interpolate of speed if True. The default is False.
-        useXR : bool, optional
-            read data as xarrays. The default is False.
         Returns
         -------
         None.
         '''
-        #  get the values that match the type
-        self.useXR = useXR
-        myVars = self.myVariables(useVelocity, useErrors, noSpeed=noSpeed)
-        fileNames = self.dataFileNames(fileNameBase, myVars)
-        # loop over arrays and file names to read data
-        for fileName, myVar in zip(fileNames, myVars):
-            start = datetime.now()
-            if useXR:
-                myArray = xr.open_rasterio(fileName)
-                myArray = myArray.where(myArray > self.noDataDict[myVar])
-            else:
-                myArray = readGeoTiff(fileName, noData=self.noDataDict[myVar])
-            setattr(self, myVar, myArray)
-            setattr(self, f'{myVar}Interp', None)  # flush any prior interp f
-            if self.verbose:
-                print(f'read time {datetime.now()-start}')
-        #
-        self.readGeodatFromTiff(fileNames[0])
-        # compute mag for velocity and errors
+        self.variables = self.myVariables(useVelocity, useErrors, noSpeed)
+        self.readXR(fileNameBase, url=url)
         if useVelocity:
             self.vv = np.sqrt(np.square(self.vx) + np.square(self.vy))
         self.fileNameBase = fileNameBase  # save filenameBase
 
-    def writeDataToTiff(self, fileNameBase, useVelocity=True, useErrors=False,
-                        noSpeed=True, overviews=None, predictor=1,
-                        noDataDefault=None):
-        '''
-        Write a velocity product with useVelocity/useErrors/noSpeed to
-        determine which bands are written.
+    def subSetVel(self, bbox, useVelocity=True):
+        ''' Subset dataArray to a bounding box
         Parameters
         ----------
-        fileNameBase : str
-            FileNameBase should be of the form
-            pattern.*.abc or pattern*.
-            The wildcard (*) will be filled with the values in myVars
-            e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
-        useVelocity : bool, optional
-            Use the velocity variables. The default is True.
-        useErrors : bool, optional
-            Use the error variables. The default is False.
-        noSpeed : bool, optional
-            Don't use speed. The default is True.
-        overviews : list, optional
-            List of overvew sizes (e.g., [2, 4, 8, 16]). The default is None.
-        predictor : int, the default is 1
-            Predictor used by gdal for compression. The default is 1.
-        noDataDefault : optional - same as data, optional
-            No data value. The default is None.
+        bbox : dict
+            {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
+        useVelocity: bool, optional
+            compute speed from vx, vy
         Returns
         -------
         None.
         '''
-        # Get var names and create files names from template
-        myVars = self.myVariables(useVelocity, useErrors, noSpeed=noSpeed)
-        fileNames = self.dataFileNames(fileNameBase, myVars)
-        # loop and write each band in myVars
-        for fileName, myVar in zip(fileNames, myVars):
-            self.writeCloudOptGeo(fileName, myVar, gdalType=self.gdalType,
-                                  overviews=None, predictor=1,
-                                  noData=self.noDataDict[myVar])
+        self.subSetData(bbox)
+        if useVelocity:
+            self.vv = np.sqrt(np.square(self.vx) + np.square(self.vy))
+
     # ------------------------------------------------------------------------
     # Dates routines.
     # ------------------------------------------------------------------------
@@ -332,7 +264,7 @@ class nisarVel(nisarBase2D):
     # ------------------------------------------------------------------------
     # Ploting routines.
     # ------------------------------------------------------------------------
-    def maxPlotV(self, maxv=7000):
+    def maxPlotV(self, maxv=7000, percentile=99):
         '''
         Uses 99 percentile range for maximum value, with maxv as an upper
         limit. Default in most cases will be much greater than actual max from
@@ -346,7 +278,8 @@ class nisarVel(nisarBase2D):
         float
             Upper limit on velocity for plotting.
         '''
-        maxVel = min(np.percentile(self.vv[np.isfinite(self.vv)], 99), maxv)
+        maxVel = min(np.percentile(self.vv[np.isfinite(self.vv)], percentile),
+                     maxv)
         return math.ceil(maxVel/100.)*100.  # round up to nearest 100
 
     def displayVel(self, axImage=None, fig=None, maxv=7000):
@@ -388,3 +321,4 @@ class nisarVel(nisarBase2D):
         axImage.tick_params(axis='x', labelsize=self.plotFontSize)
         axImage.tick_params(axis='y', labelsize=self.plotFontSize)
         return fig, axImage
+

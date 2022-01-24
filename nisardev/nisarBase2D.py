@@ -11,9 +11,12 @@ import numpy as np
 import functools
 import xarray as xr
 from scipy.interpolate import RegularGridInterpolator
-from osgeo import gdal,  osr
 import pyproj
-import os
+import dask
+import rioxarray
+
+
+CHUNKSIZE = 512
 
 
 class nisarBase2D():
@@ -27,7 +30,7 @@ class nisarBase2D():
     __metaclass__ = ABCMeta
 
     def __init__(self,  sx=None, sy=None, x0=None, y0=None, dx=None, dy=None,
-                 verbose=True, epsg=None, useXR=False):
+                 verbose=True, epsg=None, useXR=False, numWorkers=4):
         ''' initialize a nisar velocity object'''
         self.sx, self.sy = sx, sy  # Image size in pixels
         self.x0, self.y0 = x0, y0  # Origin (center of lower left pixel) in m
@@ -37,6 +40,10 @@ class nisarBase2D():
         self.verbose = verbose  # Print progress messages
         self.epsg = epsg  # EPSG (sussm 3031 and 3413; should work for others)
         self.useXR = useXR  # Use XR arrays rather than numpy (not well tested)
+        self.xr = None
+        self.subset = None
+        self.flipY = True
+        dask.config.set(num_workers=numWorkers)
 
     # ------------------------------------------------------------------------
     # Setup abtract methods for child classes
@@ -57,6 +64,11 @@ class nisarBase2D():
         pass
 
     @abstractmethod
+    def readDataFromURL():
+        ''' Abstract read geotiff(s) - define in child class.'''
+        pass
+
+    @abstractmethod
     def writeDataToTiff():
         ''' Abstract write geotiff(s) - define in child class.'''
         pass
@@ -64,23 +76,6 @@ class nisarBase2D():
     # ------------------------------------------------------------------------
     # def setup xy coordinates
     # ------------------------------------------------------------------------
-
-    def xyCoordinates(self):
-        '''
-        Compute xy coordinates for image(y,x).
-        Save as 1-D arrays: self.xx, self.yy.
-        Returns
-        -------
-        None.
-        '''
-        # check specs exist
-        if None in (self.x0, self.y0, self.sx, self.sy, self.dx, self.dy):
-            myError('nisarVel.xyCoordinates: x0,y0,sx,sy,dx,dy undefined '
-                    f'{self.x0},{self.y0},{self.sx},{self.sy},'
-                    f'{self.dx},{self.dy}')
-        # x0...x0+(sx-1)*dx, y0...
-        self.xx = np.arange(self.x0, self.x0 + int(self.sx) * self.dx, self.dx)
-        self.yy = np.arange(self.y0, self.y0 + int(self.sy) * self.dy, self.dy)
 
     def xyGrid(self):
         '''
@@ -92,8 +87,9 @@ class nisarBase2D():
         '''
         #
         # Computer 1-D (xx,yy) coordinates if not computed.
-        if len(self.xx) == 0:
-            self.xyCoordinates()
+        if self.xx is None or self.sx is None:
+            print('xyGrid: geolocation variables not defined')
+            return
         # setup arrays
         self.xGrid = np.zeros((self.sy, self.sx))
         self.yGrid = np.zeros((self.sy, self.sx))
@@ -157,24 +153,6 @@ class nisarBase2D():
             llcorners[myKey] = {'lat': lat[0], 'lon': lon[0]}
         return llcorners
 
-    def getWKT_PROJ(self, epsgCode):
-        '''
-        Get the wkt for the image
-        Parameters
-        ----------
-        epsgCode : int
-            epsg code.
-        Returns
-        -------
-        wkt : str
-            projection info as wkt string:
-                'PROJCS["WGS 84 / NSIDC Sea Ice Polar Stereographic North",...'
-        '''
-        sr = osr.SpatialReference()
-        sr.ImportFromEPSG(epsgCode)
-        wkt = sr.ExportToWkt()
-        return wkt
-
     def getDomain(self, epsg):
         '''
         Return names of domain name based on epsg (antartica or greenland).
@@ -214,12 +192,9 @@ class nisarBase2D():
         '''
         if len(self.xx) <= 0:
             self.xyCoordinates()  # Setup coordinates if not done already.
-        # XR, so nothing to do.
-        if self.useXR:
-            return
         # setup interpolation, Note y,x indexes for row colum
         for myVar in myVars:
-            myV = getattr(self, myVar)  # Get variable. (e.g. vx,vy)
+            myV = getattr(self, myVar).compute()
             setattr(self, f'{myVar}Interp',
                     RegularGridInterpolator((self.yy, self.xx), myV,
                                             method="linear"))
@@ -247,10 +222,7 @@ class nisarBase2D():
         np float array
             Interpolated valutes from x,y locations.
         '''
-        if self.useXR:
-            return self._interpXR(x, y, myVars, **kwargs)
-        else:
-            return self._interpNP(x, y, myVars, **kwargs)
+        return self._interpNP(x, y, myVars, **kwargs)
 
     def _toInterp(self, x, y):
         '''
@@ -340,106 +312,168 @@ class nisarBase2D():
         #
         return myResults
 
+    def readXR(self, fileNameBase, url=False):
+        ''' Use read data into rioxarray variable
+        Parameters
+        ----------
+        fileNameBase = str
+            template with filename firstpart_*_secondpart (no .tif)
+            the * will be replaced with the different compnents (e.g., vx,vy)
+        url bool, optional
+            Set true if fileNameBase is a link
+        '''
+        # Do a lazy open on the tiffs
+        self.xr = dask.compute(self.lazy_openTiff(fileNameBase, url=url))[0]
+        # get the geo info (origin, epsg, size, res)
+        self.parseGeoInfo(subset=False)
+        # Save variables
+        self._mapVariables()
+
+    def _mapVariables(self, subset=False):
+        ''' Map the xr variables to band variables (e.g., vx, vy) '''
+        if subset:
+            myData = self.subset.data
+        else:
+            myData = self.xr.data
+        for myVar, bandData in zip(self.variables, myData):
+            if self.flipY:
+                setattr(self, myVar, np.flipud(bandData))
+            else:
+                setattr(self, myVar, bandData)
+
+    @dask.delayed
+    def lazy_openTiff(self, fileNameBase, masked=False, url=False, **kwargs):
+        ''' Lazy open of a single velocity product
+        Parameters
+        ----------
+        fileNameBase, str
+            template with filename firstpart_*_secondpart (no .tif)
+        '''
+        # print(href)d
+        das = []
+        option = '?list_dir=no'
+        for band in self.variables:
+            bandTiff = fileNameBase
+            if url:
+                bandTiff = f'/vsicurl/{option}&url={fileNameBase}'
+            bandTiff = bandTiff.replace('*', band) + '.tif'
+            # create rioxarry
+            chunks = {'band': 1, 'y': CHUNKSIZE, 'x': CHUNKSIZE}
+            da = rioxarray.open_rasterio(bandTiff, lock=True,
+                                         default_name=fileNameBase,
+                                         chunks=chunks, masked=masked)
+            da['band'] = [band]
+            da['name'] = 'myData'
+            da['_FillValue'] = self.noDataDict[band]
+            das.append(da)
+        # Concatenate bands (components)
+        return xr.concat(das, dim='band', join='override',
+                         combine_attrs='drop')
+
+    def subSetData(self, bbox):
+        ''' Subset dataArray using a box to crop limits
+        Parameters
+        ----------
+        bbox, dict
+            crop area {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
+        '''
+        self.subset = self.xr.rio.clip_box(**bbox)
+        # Save variables
+        self._mapVariables(subset=True)
+        # update the geo info (origin, epsg, size, res)
+        self.parseGeoInfo(subset=True)
+
     # ----------------------------------------------------------------------
     # Read geometry info
     # ----------------------------------------------------------------------
 
-    def readGeodatFromTiff(self, tiffFile):
-        '''
-        Read geo information (x0,y0,sx,sy,dx,dy) from a tiff file.
-        Assumes PS coordinates.
-        Parameters
-        ----------
-        tiffFile : str
-            Name of tiff file.
-        Returns
-        -------
-        None.
-        '''
-        if not os.path.exists(tiffFile):
-            myError(f"readGeodatFromTiff: {tiffFile} does not exist")
-        try:
-            gdal.AllRegister()
-            ds = gdal.Open(tiffFile)
-            proj = osr.SpatialReference(wkt=ds.GetProjection())
-            self.epsg = int(proj.GetAttrValue('AUTHORITY', 1))
-            self.sx, self.sy = ds.RasterXSize,  ds.RasterYSize
-            gt = ds.GetGeoTransform()
-            self.dx, self.dy = abs(gt[1]), abs(gt[5])
-            # lower left corner corrected to pixel centered values
-            self.x0 = (gt[0] + self.dx/2)
-            # y-coord check direction
-            if gt[5] < 0:
-                self.y0 = (gt[3] - self.sy * self.dy + self.dy/2)
-            else:
-                self.y0 = (gt[3] + self.dy/2)
-            self.xyCoordinates()
-        except Exception:
-            myError(f"readGeodatFromTiff: {tiffFile} exists but cannot parse")
+    def parseGeoInfo(self, subset=False):
+        '''Parse geo info out of xr spatial ref'''
+        if subset:
+            myXr = self.subset
+        else:
+            myXr = self.xr
+        if myXr is None:
+            print('parseGeoInfo: xr not read yet')
+            return
+        # Get wkt and convert to crs
+        self.wkt = myXr.spatial_ref.attrs['spatial_ref']
+        myCRS = pyproj.CRS.from_wkt(self.wkt)
+        # Save epsg
+        self.epsg = myCRS.to_epsg()
+        # get lower left corner, sx, sy, dx, dy
+        gT = [float(x) for x in myXr.spatial_ref.attrs['GeoTransform'].split()]
+        self.dx, self.dy = abs(gT[1]), abs(gT[5])
+        if gT[5] > 0:
+            self.flipY = False
+        self.x0 = np.min(myXr.x).item()
+        self.y0 = np.min(myXr.y).item()
+        self.sx, self.sy = len(myXr.x), len(myXr.y)
+        # coordinates
+        self.xx = myXr.coords['x'].values
+        if self.flipY:
+            self.yy = np.flip(myXr.coords['y'].values)
+        else:
+            self.yy = myXr.coords['y'].values
+        self.xyGrid()
 
     # ----------------------------------------------------------------------
     # Output a band as geotif
     # ----------------------------------------------------------------------
 
-    def writeCloudOptGeo(self, tiffFile, myVar, gdalType=gdal.GDT_Float32,
-                         overviews=None, predictor=1, noData=None):
+    def writeCloudOptGeo(self, tiffRoot, full=False, myVars=None, **kwargs):
         '''
-        Write a cloud optimized geotiff with overviews if requested.
+        Write a cloud optimized geotiff(s) with overviews if requested.
+        By default writes all bands to indiviual files.
+        Write individual bands with
         Parameters
         ----------
         tiffFile : str
-            Name of tiff file.
-        myVar : str
-            Name of internal variable (e.g., ".vx").
-        gdalType : gdal type code, optional
-            Gdal type code. The default is gdal.GDT_Float32.
-        overviews : list, optional
-            List of overvew sizes (e.g., [2, 4, 8, 16]). The default is None.
-        predictor : int, optional
-            Predictor used by gdal for compression. The default is 1.
-        noData : optional - same as data, optional
-            No data value. The default is None.
+            Root name of tiff files
+                myFile.*.X.tif or  myFile.*.X  -> myFile.myVar.X.tif
+                myFile or myFile.tif -> myFile.myVar.tif
+        myVar : str or [str,...], optional
+            Name of a single or multiple variables to save  (e.g., ".vx").
+        kwargs : optional
+            pass through keywords to rio.to_raster
         Returns
         -------
         None.
         '''
-        # use a temp mem driver for CO geo
-        driverM = gdal.GetDriverByName("MEM")
-        nx, ny = self.sizeInPixels()
-        dx, dy = self.pixSizeInM()
-        dst_ds = driverM.Create('', nx, ny, 1, gdalType)
-        # set geometry
-        tiffCorners = self.computePixEdgeCornersXYM()
-        dst_ds.SetGeoTransform((tiffCorners['ul']['x'], dx, 0,
-                                tiffCorners['ul']['y'], 0, -dy))
-        # Set projection
-        wkt = self.getWKT_PROJ(self.epsg)
-        dst_ds.SetProjection(wkt)
-        #  Handle no data value
-        if noData is not None:
-            getattr(self, myVar)[np.isnan(getattr(self, myVar))] = noData
-            dst_ds.GetRasterBand(1).SetNoDataValue(noData)
-        # write data
-        dst_ds.GetRasterBand(1).WriteArray(np.flipud(getattr(self, myVar)))
-        # Process overviews
-        overFlag = 'No'
-        if overviews is not None:
-            overFlag = 'YES'
-            dst_ds.BuildOverviews('AVERAGE', overviews)
-        # now copy to a geotiff
-        # mem -> geotiff forces correct order for c opt geotiff
-        dst_ds.FlushCache()
-        #
-        # setup file driver and copy mem to it.
-        driverT = gdal.GetDriverByName("GTiff")
-        dst_ds2 = driverT.CreateCopy(tiffFile, dst_ds,
-                                     options=[f'COPY_SRC_OVERVIEWS={overFlag}',
-                                              'COMPRESS=LZW',
-                                              f'PREDICTOR={predictor}',
-                                              'TILED=YES'])
-        # Flush cache and free memory to finish
-        dst_ds2.FlushCache()
-        dst_ds, dst_ds2 = None, None
+        # variables to write
+        if myVars is None:
+            myVars is self.myVars
+        else:
+            if type(myVars) is str:  # Ensure its a str
+                myVars = [myVars]
+        # By default write subset unless none exists or full flagged
+        if full or self.subset is None:
+            myXR = self.xr
+        else:
+            myXR = self.subset
+        for myVar, band in zip(self.myVars, myXR):
+            if myVar in myVars:
+                band.rio.to_raster(self.tiffFileName(tiffRoot, myVar),
+                                   **kwargs)
+
+    def tiffFileName(self, tiffRoot, myVar):
+        ''' Create tiff Name from root and var type
+        if "*" in name, replace with myVar, otherwise append ".myVar"
+        append ".tif" if not already present
+        Write a cloud optimized geotiff with overviews if requested.
+        Parameters
+        ----------
+        tiffFile : str
+            Root name for output tiff file.
+        myVar : str
+            Name of variable being written
+        '''
+        tiffRoot = tiffRoot.replace('.tif', '')
+        if '*' in tiffRoot:
+            tiffName = tiffRoot.replace('*', myVar)
+        else:
+            tiffName = f'{tiffRoot}.{myVar}'
+        return f'{tiffName}.tif'
 
     # ----------------------------------------------------------------------
     # Return  geometry params in m and km

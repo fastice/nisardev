@@ -274,15 +274,21 @@ class cvPoints:
         @functools.wraps(func)
         def cvV(*args, **kwargs):
             x, y = func(*args)
-            vx, vy, vr = args[1].interp(x, y, ['vx', 'vy', 'vz'], **kwargs)
-            iGood = np.isfinite(vx)
-            return vx, vy, vr, iGood
+            result = args[1].interp(x, y, **kwargs)
+            iGood = np.isfinite(result[0])
+            result.append(iGood)
+            return result
         return cvV
 
     @_cvVels
     def vRangeData(self, vel, minv, maxv):
         ''' Get velocity from vel map for points in range (vmin,vmax).'''
         return self.xyVRangem(minv, maxv)
+
+    @_cvVels
+    def vAllData(self, vel):
+        ''' Get velocity from vel map for all points.'''
+        return self.xyAllm()
 
     #
     # ===================== Stats Stuff ============================
@@ -359,7 +365,7 @@ class cvPoints:
         iZero = self.zeroCVs()
         return self.lat(iZero), self.lat(iZero)
 
-    def xyzerom(self):
+    def xyZerom(self):
         '''
         Return x and y (m) coordinates of zero CVs.
         Returns
@@ -370,7 +376,7 @@ class cvPoints:
         iZero = self.zeroCVs()
         return self.x[iZero], self.y[iZero]
 
-    def xyzerokm(self):
+    def xyZerokm(self):
         '''
         Return x and y (km) coordinates of zero CVs.
         Returns
@@ -378,10 +384,10 @@ class cvPoints:
         x,y  : nparray
            x and y in km of zero CVs.
         '''
-        x, y = self.xyzerom()
+        x, y = self.xyZerom()
         return x/1000., y/1000.
 
-    def xyallm(self):
+    def xyAllm(self):
         '''
         Return x and y (m) coordinates of all CVs.
         Returns
@@ -391,7 +397,7 @@ class cvPoints:
         '''
         return self.x, self.y
 
-    def xyallkm(self):
+    def xyAllkm(self):
         '''
         Return x and y (km) coordinates of all CVs.
         Returns
@@ -433,13 +439,16 @@ class cvPoints:
             x, y = func(*args, nSig=nSig)
             #
             if vel is not None:
-                vx, vy, vr = vel.interp(x, y, ['vx', 'vy'])
-                iGood = np.isfinite(vx)
+                result = vel.interp(x, y)
+                iGood = result[-1]
                 x, y = x[iGood], y[iGood]
+            for keyw, value in zip(['marker', 'linestyle'], ['.', 'None']):
+                if keyw not in kwargs:
+                    kwargs[keyw] = value
             if ax is None:
-                plt.plot(x*0.001, y*0.001, '.', **kwargs)
+                plt.plot(x*0.001, y*0.001, **kwargs)
             else:
-                ax.plot(x*0.001, y*0.001, '.', **kwargs)
+                ax.plot(x*0.001, y*0.001,  **kwargs)
         return plotCVXY
 
     @_plotCVLocs
@@ -458,6 +467,20 @@ class cvPoints:
             DESCRIPTION.
         '''
         return self.xyVRangem(minv, maxv)
+
+    @_plotCVLocs
+    def plotAllCVLocs(self, **kwargs):
+        '''
+        plot x,y locations for points where maxv > v > min.
+        Parameters
+        ----------
+        None.
+        Returns
+        -------
+        None
+            DESCRIPTION.
+        '''
+        return self.xyAllm()
 
     def getOutlierLocs(self, minv, maxv, vel, nSig=3):
         ''' Get outliers where difference in either velocity component is >
@@ -509,26 +532,26 @@ class cvPoints:
     # ===================== CV plot differences ===============================
     #
 
-    def showDiffs(self, vel, minv, maxv):
-        '''
-        Plot differences and histograms of differences
-        Parameters
-        ----------
-        vel : nisarVel
-            A nisarVel object
-        minv : float
-            minimum speed of desired range.
-        maxv : float
-            maximum speed of desired range.
-        Returns
-        -------
-        None
-            DESCRIPTION.
-        '''
-        figD = plt.figure(figsize=(14, 5))
-        self.plotVRangeCVDiffs(vel, figD, minv, maxv)
-        self.plotVRangeHistDiffs(vel, figD, minv, maxv)
-        plt.tight_layout()
+    # def showDiffs(self, vel, fig, minv, maxv):
+    #     '''
+    #     Plot differences and histograms of differences
+    #     Parameters
+    #     ----------
+    #     vel : nisarVel
+    #         A nisarVel object
+    #     minv : float
+    #         minimum speed of desired range.
+    #     maxv : float
+    #         maximum speed of desired range.
+    #     Returns
+    #     -------
+    #     None
+    #         DESCRIPTION.
+    #     '''
+    #     figD = plt.figure(figsize=(14, 5))
+    #     self.plotVRangeCVDiffs(vel, figD, minv, maxv)
+    #     self.plotVRangeHistDiffs(vel, figD, minv, maxv)
+    #     plt.tight_layout()
 
     def _plotDiffs(func):
         '''
@@ -540,25 +563,63 @@ class cvPoints:
             Function being decorated.
         Returns
         -------
-        axImage
+        ax
             Axis for the plot.
         '''
         @functools.wraps(func)
-        def plotp(*args, **kwargs):
+        def plotp(*args,  ax=None, xColor='r', yColor='b', legendKwargs={},
+                  **kwargs):
             x, y, iPts = func(*args)
             dx, dy, iGood = args[0].cvDifferences(x, y, iPts, args[1])
-            axImage = args[2].add_subplot(131)
-            axImage.plot(dx, 'r.')
-            axImage.plot(dy, 'b.')
-            axImage.set_xlabel('Point', size=args[0].labelFontSize)
-            axImage.set_ylabel('$u_x-v_x, u_y-v_y$ (m/yr)',
-                               size=args[0].labelFontSize)
-            axImage.legend(['$u_x-v_x$', '$u_y-v_y$'],
-                           fontsize=args[0].legendFontSize)
-            axImage.tick_params(axis='x', labelsize=args[0].plotFontSize)
-            axImage.tick_params(axis='y', labelsize=args[0].plotFontSize)
-            return axImage
+            # defaults
+            for keyw, value in zip(['marker', 'linestyle'], ['.', 'None']):
+                if keyw not in kwargs:
+                    kwargs[keyw] = value
+            #
+            if 'fontsize' not in legendKwargs:
+                legendKwargs['fontsize'] = args[0].legendFontSize
+            #
+            if ax is None:
+                ax = plt.subplot(111)
+            #
+            ax.plot(dx, color=xColor, label='$u_x-v_x$',  **kwargs)
+            ax.plot(dy, color=yColor, label='$u_y-v_y$',  **kwargs)
+            ax.set_xlabel('Point', size=args[0].labelFontSize)
+            ax.set_ylabel('$u_x-v_x, u_y-v_y$ (m/yr)',
+                          size=args[0].labelFontSize)
+            ax.legend(**legendKwargs)
+            ax.tick_params(axis='x', labelsize=args[0].plotFontSize)
+            ax.tick_params(axis='y', labelsize=args[0].plotFontSize)
+            return ax
         return plotp
+
+    @_plotDiffs
+    def plotVRangeCVDiffs(self, vel, minv, maxv, **kwargs):
+        '''
+        Plot differences between c/v points and interpolated values from
+        v in range (minv,maxv).
+        Originall written with decorator to accomodate multiple cases,
+        but collapsed it down to one. Kept decorator for future mods.
+        Parameters
+        ----------
+        vel : nisarVel
+            Velocity map for comparison.
+        minv : float
+            minimum speed of desired range.
+        maxv : float
+            maximum speed of desired range.
+        Returns
+        -------
+        x : nparray
+            x coordinates.
+        y : nparray
+            y coordinates.
+        iPts : bool array
+            points.
+        '''
+        x, y = self.xyVRangem(minv, maxv)
+        iPts = self.vRangeCVs(minv, maxv)
+        return x, y, iPts
 
     def _histDiffs(func):
         '''
@@ -580,58 +641,33 @@ class cvPoints:
             dx[dx < -threeSigma] = -threeSigma
             dx[dx > threeSigma] = threeSigma
             return dx
-        #
+
         @functools.wraps(func)
-        def ploth(*args, **kwargs):
+        def ploth(*args, axes=None, xColor='r', yColor='b', **kwargs):
             x, y, iPts = func(*args)
             dx, dy, iGood = args[0].cvDifferences(x, y, iPts, args[1])
             dx, dy = clipTail(dx), clipTail(dy)  # Set vals > 3sig to 3sig
-            axHistX = args[2].add_subplot(132)
-            axHistY = args[2].add_subplot(133)
-            colors = {'x': 'r', 'y': 'b'}
+            if axes is None:
+                _, axes = plt.subplots(1, 2)
+            colors = {'x': xColor, 'y': yColor}
+            for keyw, value in zip(['edgecolor', 'density', 'bins'],
+                                   ['k', 'True', 'auto']):
+                if keyw not in kwargs:
+                    kwargs[keyw] = value
             # produce and label plots for x and y compnents
-            for var, lab, axH in zip([dx, dy], ['x', 'y'], [axHistX, axHistY]):
-                axH.hist(var, bins='auto', density=True, color=colors[lab])
+            for var, lab, axH in zip([dx, dy], ['x', 'y'], axes):
+                axH.hist(var, facecolor=colors[lab], **kwargs)
                 axH.set_xlabel(f'$u_{lab}-v_{lab}$ (m/yr)',
                                size=args[0].labelFontSize)
-                axH.set_ylabel('Probability', size=args[0].labelFontSize)
+                axH.set_ylabel('Relative Frequency',
+                               size=args[0].labelFontSize)
                 axH.tick_params(axis='x', labelsize=args[0].plotFontSize)
                 axH.tick_params(axis='y', labelsize=args[0].plotFontSize)
-            return axHistX, axHistY
+            return axes
         return ploth
 
-    @_plotDiffs
-    def plotVRangeCVDiffs(self, vel, figD, minv, maxv):
-        '''
-        Plot differences between c/v points and interpolated values from
-        v in range (minv,maxv).
-        Originall written with decorator to accomodate multiple cases,
-        but collapsed it down to one. Kept decorator for future mods.
-        Parameters
-        ----------
-        vel : nisarVel
-            Velocity map for comparison.
-        figD : matplot lib fig
-            Figure.
-        minv : float
-            minimum speed of desired range.
-        maxv : float
-            maximum speed of desired range.
-        Returns
-        -------
-        x : nparray
-            x coordinates.
-        y : nparray
-            y coordinates.
-        iPts : bool array
-            points.
-        '''
-        x, y = self.xyVRangem(minv, maxv)
-        iPts = self.vRangeCVs(minv, maxv)
-        return x, y, iPts
-
     @_histDiffs
-    def plotVRangeHistDiffs(self, vel, figD, minv, maxv):
+    def plotVRangeHistDiffs(self, vel, minv, maxv):
         '''
         Plot differences between c/v points and interpolated values from
         v in range (minv,maxv).
@@ -683,7 +719,7 @@ class cvPoints:
         iGood : bool nparray
             Good points.
         '''
-        vx, vy, vr = vel.interp(x, y, ['vx', 'vy', 'vz'])
+        vx, vy = vel.interp(x, y)
         # subtract cvpoint values args[0] is self
         dvx, dvy = vx - self.vx[iPts], vy - self.vy[iPts]
         iGood = np.isfinite(vx)
@@ -760,3 +796,16 @@ class cvPoints:
         #
         if len(toCull) > 0:
             self.nocull[toCull] = False
+
+    def boundingBox(self, x=None, y=None, pad=10000.):
+        '''
+        Compute Bounding box for tiepoints
+        Returns
+        -------
+        bounding box {'minx': minxm, 'miny': miny, 'maxx': maxx, 'maxy' : maxy}
+
+        '''
+        if x is None or y is None:
+            x, y = self.xyAllm()
+        return {'minx': np.min(x) - pad, 'miny': np.min(y) - pad,
+                'maxx': np.max(x) + pad, 'maxy': np.max(y) + pad}
