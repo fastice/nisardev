@@ -30,7 +30,7 @@ class nisarBase2D():
     __metaclass__ = ABCMeta
 
     def __init__(self,  sx=None, sy=None, x0=None, y0=None, dx=None, dy=None,
-                 verbose=True, epsg=None, useXR=False, numWorkers=4):
+                 verbose=True, epsg=None, numWorkers=4):
         ''' initialize a nisar velocity object'''
         self.sx, self.sy = sx, sy  # Image size in pixels
         self.x0, self.y0 = x0, y0  # Origin (center of lower left pixel) in m
@@ -39,10 +39,10 @@ class nisarBase2D():
         self.xGrid, self.yGrid = [], []  # Grid of coordinate for each pixel
         self.verbose = verbose  # Print progress messages
         self.epsg = epsg  # EPSG (sussm 3031 and 3413; should work for others)
-        self.useXR = useXR  # Use XR arrays rather than numpy (not well tested)
         self.xr = None
         self.subset = None
         self.flipY = True
+        self.url = False
         dask.config.set(num_workers=numWorkers)
 
     # ------------------------------------------------------------------------
@@ -322,6 +322,7 @@ class nisarBase2D():
         url bool, optional
             Set true if fileNameBase is a link
         '''
+        self.url = url
         # Do a lazy open on the tiffs
         self.xr = dask.compute(self.lazy_openTiff(fileNameBase, url=url))[0]
         # get the geo info (origin, epsg, size, res)

@@ -11,8 +11,6 @@ import numpy as np
 from nisardev import nisarBase2D, parseDatesFromMeta, parseDatesFromDirName
 import os
 from datetime import datetime
-# import xarray as xr
-# import rioxarray
 import matplotlib.pylab as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import math
@@ -25,10 +23,11 @@ class nisarVel(nisarBase2D):
     The data can be pass in on init, or read from a geotiff.
 
     The variables that are used are specified with useVelocity, useErrrors,
-    and, noSpeedand (see nisarVel.readDatafromTiff).
+    and, readSpeed and (see nisarVel.readDatafromTiff).
 
     The variables used are returned as a list (e.g., ["vx","vy"])) by
-    nisarVel.myVariables(useVelocity=True, useErrors=False, noSpeed=True). '''
+    nisarVel.myVariables(useVelocity=True, useErrors=False, readSpeed=False).
+    '''
 
     labelFontSize = 16  # Font size for plot labels
     plotFontSize = 15  # Font size for plots
@@ -37,7 +36,7 @@ class nisarVel(nisarBase2D):
     def __init__(self,
                  vx=None, vy=None, v=None, ex=None, ey=None, e=None,
                  sx=None, sy=None, x0=None, y0=None, dx=None, dy=None,
-                 epsg=None, useXR=False, verbose=True):
+                 epsg=None, verbose=True):
         '''
         Instantiate nisarVel object. Possible bands are 'vx', 'vy','v', 'ex',
         'ey', 'e'
@@ -70,8 +69,7 @@ class nisarVel(nisarBase2D):
             pixel size for y coordinate in m. The default is None.
         epsg : int, optional
             epsg code. The default is None.
-        useXR : bool, optional
-            Use xarray rather than nparray (not tested). The default is False.
+
         verbose : bool, optional
             Increase level of informational messages. The default is True.
         Returns
@@ -79,7 +77,7 @@ class nisarVel(nisarBase2D):
         None.
         '''
         nisarBase2D.__init__(self, sx=sx, sy=sy, x0=x0, y0=y0, dx=dx, dy=dy,
-                             epsg=epsg, useXR=useXR)
+                             epsg=epsg)
         self.vx, self.vy, self.vv, self.ex, self.ey = vx, vy, v, ex, ey
         self.variables = None
         self.xr = None
@@ -90,7 +88,7 @@ class nisarVel(nisarBase2D):
                            'ex': -1.0, 'ey': -1.0}
         self.gdalType = gdal.GDT_Float32  # data type for velocity products
 
-    def myVariables(self, useVelocity, useErrors, noSpeed=False):
+    def myVariables(self, useVelocity, useErrors, readSpeed=False):
         '''
         Based on the input flags, this routine determines which velocity/error
         fields that an instance will contain.
@@ -100,7 +98,7 @@ class nisarVel(nisarBase2D):
             Include 'vx', 'vy', and 'vv'.
         useErrors : bool
             Include 'ex', and 'ey'.
-        noSpeed : bool, optional
+        readSpeed : bool, optional
             If false, don't include vv. The default is False.
         Returns
         -------
@@ -110,7 +108,7 @@ class nisarVel(nisarBase2D):
         myVars = []
         if useVelocity:
             myVars += ['vx', 'vy']
-        if not noSpeed:
+        if readSpeed:
             myVars += ['vv']
         if useErrors:
             myVars += ['ex', 'ey']
@@ -167,7 +165,8 @@ class nisarVel(nisarBase2D):
     # ------------------------------------------------------------------------
 
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
-                         noSpeed=True, url=False):
+                         readSpeed=False, url=False,
+                         index1=4, index2=5, dateFormat='%d%b%y'):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -188,17 +187,22 @@ class nisarVel(nisarBase2D):
             Interpolate velocity if True. The default is True.
         useErrors : bool, optional
             Interpolate errors if True. The default is False.
-        noSpeed : bool, optional
-            Skip interpolate of speed if True. The default is False.
+        readSpeed : bool, optional
+            Read speed (.vv) if True. The default is False.
+        url : bool, optional
+            Read data from url
+        index1, index2 : location of dates in filename with seperated by _
+        dateFormat : format code to strptime
         Returns
         -------
         None.
         '''
-        self.variables = self.myVariables(useVelocity, useErrors, noSpeed)
+        self.variables = self.myVariables(useVelocity, useErrors, readSpeed)
         self.readXR(fileNameBase, url=url)
-        if noSpeed:
+        if not readSpeed:
             self.vv = np.sqrt(np.square(self.vx) + np.square(self.vy))
         self.fileNameBase = fileNameBase  # save filenameBase
+        self.parseVelDatesFromFileName(fileNameBase)
 
     def subSetVel(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
@@ -237,29 +241,33 @@ class nisarVel(nisarBase2D):
         #
         return parseDatesFromMeta(metaFile)
 
-    def parseVelDatesFromDirName(self, dirName=None, divider='.',
-                                 dateTemplate='Vel-%Y-%m-%d.%Y-%m-%d'):
+    def parseVelDatesFromFileName(self, fileNameBase, index1=4, index2=5,
+                                  dateFormat='%d%b%y'):
         '''
         Parse the dates from the directory name the velocity products are
         stored in.
         Parameters
         ----------
-        dirName : str, optional
-            Name of the directory. The default is None.
-        divider : str, optional
-            character that divides up name xyz.date1.date2. The default is '.'.
-        dateTemplate : str, optional
-            Template for dir name. The default is 'Vel-%Y-%m-%d.%Y-%m-%d'.
+           fileNameBase : str
+            FileNameBase should be of the form
+            pattern.*.abc or pattern*.
+            The wildcard (*) will be filled with the values in myVars
+            e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
+        index1, index2 : ints, optional
+            location of dates in filename with seperated by _
+        dateFormat : str, optional
+            format code to strptime
         Returns
         -------
-        dates : [datetime, datetime]
+        date: mid date.
             First and last dates from meta file.
         '''
-        if dirName is None:
-            # Special case to temove release subdir if it exists.
-            prodDir = self.fileNameBase.replace('/release', '')
-            dirName = os.path.dirname(prodDir).split('/')[-1]
-        return parseDatesFromDirName(dirName, dateTemplate, divider)
+        baseNamePieces = os.path.basename(fileNameBase).split('_')
+        self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
+        self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
+        self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
+        #
+        return self.midDate
 
     # ------------------------------------------------------------------------
     # Ploting routines.
@@ -321,4 +329,3 @@ class nisarVel(nisarBase2D):
         axImage.tick_params(axis='x', labelsize=self.plotFontSize)
         axImage.tick_params(axis='y', labelsize=self.plotFontSize)
         return fig, axImage
-

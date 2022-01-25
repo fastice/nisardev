@@ -78,7 +78,7 @@ def setKey(myKey, defaultValue, **kwargs):
     return defaultValue
 
 
-def parseDatesFromDirName(dirName, dateTemplate, divider):
+def parseDatesFromName(dirName, dateTemplate, divider):
     '''
     Parse date from dir name with a template such as:
     Vel-2015-01-01.2015-12-31
@@ -96,6 +96,7 @@ def parseDatesFromDirName(dirName, dateTemplate, divider):
         First and last dates from meta file.
     '''
     dates = []
+    print(dirName, divider)
     for dN, dT in zip(dirName.split(divider), dateTemplate.split(divider)):
         print(dN, dT)
         if '%' in dT:
