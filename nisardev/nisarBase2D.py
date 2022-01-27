@@ -43,6 +43,7 @@ class nisarBase2D():
         self.subset = None
         self.flipY = True
         self.url = False
+        self.xforms = {}  # Cached pyproj transforms
         dask.config.set(num_workers=numWorkers)
 
     # ------------------------------------------------------------------------
@@ -202,6 +203,23 @@ class nisarBase2D():
     # -----------------------------------------------------------------------
     # Interpolate geo image.
     # -----------------------------------------------------------------------
+    def _convertCoordinates(func):
+        @functools.wraps(func)
+        def convertCoordsInner(inst, xin, yin, *args, **kwargs):
+            # No source EPSG so just pass original coords back
+            if 'sourceEPSG' not in kwargs:
+                return func(inst, xin, yin, *args, **kwargs)
+            # Ensure epsg a string
+            sourceEPSG = str(kwargs['sourceEPSG'])
+            # See if xform already cached
+            if sourceEPSG not in inst.xforms:
+                inst.xforms[sourceEPSG] = \
+                    pyproj.Transformer.from_crs(f"EPSG:{sourceEPSG}",
+                                                f"EPSG:{inst.epsg}")
+            # Transform coordates
+            xout, yout = inst.xforms[sourceEPSG].transform(xin, yin)
+            return func(inst, xout, yout, *args, **kwargs)
+        return convertCoordsInner
 
     def interpGeo(self, x, y, myVars, **kwargs):
         '''
@@ -224,7 +242,7 @@ class nisarBase2D():
         '''
         return self._interpNP(x, y, myVars, **kwargs)
 
-    def _toInterp(self, x, y):
+    def _toInterp(self, x, y, **kwargs):
         '''
         Return xy values of coordinates that within the image bounds for
         interpolation.
@@ -250,38 +268,38 @@ class nisarBase2D():
         igood = np.logical_and(xgood, ygood)
         return x1[igood], y1[igood], igood
 
-    def _interpXR(self, x, y, myVars, **kwargs):
-        '''
-        Interpolate myVar(y,x) specified myVars (e.g., ['vx'..]) where myVars
-        are xarrays. This routine has had little testing.
-        Parameters
-        ----------
-        x: np float array
-            x coordinates in m to interpolate to.
-        y: np float array
-            y coordinates in m to interpolate to.
-        myVars : list of str
-            list of variable names as strings, e.g. ['vx',...].
-        **kwargs : TBD
-            Keyword pass through to interpolator.
-        Returns
-        -------
-        myResults : float np array
-            Interpolated valutes from x,y locations.
-        '''
-        x1, y1, igood = self._toInterp(x, y)
-        x1xr = xr.DataArray(x1)
-        y1xr = xr.DataArray(y1)
-        #
-        myResults = [np.full(x1.transpose().shape, np.NaN) for x in myVars]
-        for myVar, i in zip(myVars, range(0, len(myVars))):
-            tmp = getattr(self,
-                          f'{myVar}').interp(x=x1xr, y=y1xr, method='linear')
-            myResults[i][igood] = tmp.values.flatten()
-            myResults[i] = np.reshape(myResults[i], x.shape)
-        #
-        return myResults
-
+    # def _interpXR(self, x, y, myVars, **kwargs):
+    #     '''
+    #     Interpolate myVar(y,x) specified myVars (e.g., ['vx'..]) where myVars
+    #     are xarrays. This routine has had little testing.
+    #     Parameters
+    #     ----------
+    #     x: np float array
+    #         x coordinates in m to interpolate to.
+    #     y: np float array
+    #         y coordinates in m to interpolate to.
+    #     myVars : list of str
+    #         list of variable names as strings, e.g. ['vx',...].
+    #     **kwargs : TBD
+    #         Keyword pass through to interpolator.
+    #     Returns
+    #     -------
+    #     myResults : float np array
+    #         Interpolated valutes from x,y locations.
+    #     '''
+    #     x1, y1, igood = self._toInterp(x, y)
+    #     x1xr = xr.DataArray(x1)
+    #     y1xr = xr.DataArray(y1)
+    #     #
+    #     myResults = [np.full(x1.transpose().shape, np.NaN) for x in myVars]
+    #     for myVar, i in zip(myVars, range(0, len(myVars))):
+    #         tmp = getattr(self,
+    #                       f'{myVar}').interp(x=x1xr, y=y1xr, method='linear')
+    #         myResults[i][igood] = tmp.values.flatten()
+    #         myResults[i] = np.reshape(myResults[i], x.shape)
+    #     #
+    #     return myResults
+    @_convertCoordinates
     def _interpNP(self, x, y, myVars, **kwargs):
         '''
         Interpolate myVar(y,x) specified myVars (e.g., ['vx'..]) where myVars

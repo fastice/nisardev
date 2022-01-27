@@ -8,7 +8,7 @@ Created on Mon Feb 10 11:08:15 2020
 
 # geoimage.py
 import numpy as np
-from nisardev import nisarBase2D, parseDatesFromMeta, parseDatesFromDirName
+from nisardev import nisarBase2D, parseDatesFromMeta
 import os
 from datetime import datetime
 import matplotlib.pylab as plt
@@ -29,9 +29,9 @@ class nisarVel(nisarBase2D):
     nisarVel.myVariables(useVelocity=True, useErrors=False, readSpeed=False).
     '''
 
-    labelFontSize = 16  # Font size for plot labels
-    plotFontSize = 15  # Font size for plots
-    legendFontSize = 15  # Font size for legends
+    labelFontSize = 14  # Font size for plot labels
+    plotFontSize = 12  # Font size for plots
+    legendFontSize = 12  # Font size for legends
 
     def __init__(self,
                  vx=None, vy=None, v=None, ex=None, ey=None, e=None,
@@ -136,7 +136,7 @@ class nisarVel(nisarBase2D):
         # myVars = self.myVariables(useVelocity, useErrors)
         self._setupInterpolator(self.variables)
 
-    def interp(self, x, y):
+    def interp(self, x, y, **kwargs):
         '''
         Call appropriate interpolation method to interpolate myVars at x, y
         points.
@@ -158,7 +158,7 @@ class nisarVel(nisarBase2D):
             if getattr(self, f'{myVar}Interp') is None:
                 self._setupInterp()
                 break  # One call will setup all myVars
-        return self.interpGeo(x, y, self.variables)
+        return self.interpGeo(x, y, self.variables, **kwargs)
 
     # ------------------------------------------------------------------------
     # I/O Routines
@@ -290,7 +290,7 @@ class nisarVel(nisarBase2D):
                      maxv)
         return math.ceil(maxVel/100.)*100.  # round up to nearest 100
 
-    def displayVel(self, axImage=None, fig=None, maxv=7000):
+    def displayVel(self, ax=None, fig=None, maxv=7000, **kwargs):
         '''
         Use matplotlib to show velocity in a single subplot with a color
         bar. Clip to absolute max set by maxv, though in practives percentile
@@ -305,7 +305,7 @@ class nisarVel(nisarBase2D):
         -------
         fig : matplot lib fig
             Figure used for plot.
-        axImage : matplot lib ax
+        ax : matplot lib ax
             Axis used for plot.
         '''
         if fig is None:
@@ -314,18 +314,18 @@ class nisarVel(nisarBase2D):
                              figsize=(10.*sx/sy, 10.))
         #
         # b = self.boundsInKm()  # bounds for plot window
-        if axImage is None:
-            axImage = fig.add_subplot(111)
-        divider = make_axes_locatable(axImage)  # Create space for colorbar
+        if ax is None:
+            ax = fig.add_subplot(111)
+        divider = make_axes_locatable(ax)  # Create space for colorbar
         cbAx = divider.append_axes('right', size='5%', pad=0.05)
-        pos = axImage.imshow(self.vv, origin='lower', vmin=0,
-                             vmax=self.maxPlotV(maxv=maxv),
-                             extent=self.extentInKm())
+        pos = ax.imshow(self.vv, origin='lower', vmin=0,
+                        vmax=self.maxPlotV(maxv=maxv),
+                        extent=self.extentInKm(), **kwargs)
         cb = fig.colorbar(pos, cax=cbAx, orientation='vertical', extend='max')
         cb.set_label('Speed (m/yr)', size=self.labelFontSize)
         cb.ax.tick_params(labelsize=self.plotFontSize)
-        axImage.set_xlabel('X (km)', size=self.labelFontSize)
-        axImage.set_ylabel('Y (km)', size=self.labelFontSize)
-        axImage.tick_params(axis='x', labelsize=self.plotFontSize)
-        axImage.tick_params(axis='y', labelsize=self.plotFontSize)
-        return fig, axImage
+        ax.set_xlabel('X (km)', size=self.labelFontSize)
+        ax.set_ylabel('Y (km)', size=self.labelFontSize)
+        ax.tick_params(axis='x', labelsize=self.plotFontSize)
+        ax.tick_params(axis='y', labelsize=self.plotFontSize)
+        return fig, ax

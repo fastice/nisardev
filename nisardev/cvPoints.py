@@ -12,6 +12,7 @@ import functools
 import matplotlib.pylab as plt
 from nisardev import myError
 from IPython.display import Markdown as md
+import pandas as pd
 
 
 class cvPoints:
@@ -22,9 +23,9 @@ class cvPoints:
         computing the statistics of these differences, and
         plotting the differencs and loctions'''
 
-    labelFontSize = 16  # Font size for plot labels
-    plotFontSize = 15  # Font size for plots
-    legendFontSize = 15  # Font size for legends
+    labelFontSize = 14  # Font size for plot labels
+    plotFontSize = 12  # Font size for plots
+    legendFontSize = 12  # Font size for legends
 
     def __init__(self, cvFile=None, epsg=None, wktFile=None):
         '''
@@ -301,16 +302,29 @@ class cvPoints:
             ''' make a markdown table '''
             myTable = md(f'|Statistic|$u_x - v_x$ (m/yr)|$u_y - v_y$ (m/yr)|'
                          f'N points|\n'
-                         f'|------|------------|------------|---------|\n'
+                         f'|---|---|---|---|\n'
                          f'|Mean|{muX:0.2}|{muY:0.2}|{nPts}|\n'
                          f'|Std.Dev.|{sigX:0.2}|{sigY:0.2}|{nPts}|\n'
                          f'|rms|{rmsX:0.2}|{rmsY:0.2}|{nPts}|')
             return muX, muY, sigX, sigY, rmsX, rmsY, nPts, myTable
 
+        def pandasTable(muX, muY, sigX, sigY, rmsX, rmsY, nPts, midDate):
+            dfData = pd.DataFrame([[muX, muY, sigX, sigY, rmsX, rmsY]],
+                                  columns=pd.MultiIndex.from_product(
+                                  [['Mean', 'Sigma', 'RMS'],
+                                   ['$$v_x-u_x$$', '$$v_y-u_y$$']]),
+                                  index=pd.Index([midDate]))
+            dfPoints = pd.DataFrame([[nPts]],
+                                    columns=pd.MultiIndex.from_product(
+                                        [['Count'], ['n']]),
+                                    index=pd.Index([midDate]))
+            df = pd.concat([dfData, dfPoints], axis=1)
+            return muX, muY, sigX, sigY, rmsX, rmsY, nPts, df
         # the actual stats
+
         @functools.wraps(func)
         def mstd(*args, table=False, **kwargs):
-            x, y, iPts = func(*args)
+            x, y, iPts, midDate = func(*args)
             dvx, dvy, iGood = args[0].cvDifferences(x, y, iPts, args[1])
             muX, muY = np.average(dvx), np.average(dvy)
             rmsX = np.sqrt(np.average(dvx**2))
@@ -319,7 +333,8 @@ class cvPoints:
             if not table:
                 return muX, muY, sigX, sigY, rmsX, rmsY, sum(iGood)
             else:
-                return statsTable(muX, muY, sigX, sigY, rmsX, rmsY, sum(iGood))
+                return pandasTable(muX, muY, sigX, sigY, rmsX, rmsY,
+                                   sum(iGood), midDate)
         return mstd
 
     @_stats
@@ -327,7 +342,57 @@ class cvPoints:
         ''' get stats for cvpoints in range (minv,maxv) '''
         x, y = self.xyVRangem(minv, maxv)
         iPts = self.vRangeCVs(minv, maxv)
-        return x, y, iPts
+        midDate = vel.midDate.strftime('%Y-%m-%d')
+        return x, y, iPts, midDate
+
+    def statsStyle(self, styler, thresh=1.0, caption=None):
+        '''
+        Setup the pandas style information to display a stats table.
+
+        Parameters
+        ----------
+        styler : pandas.io.formats.style.Styler
+            style for stats table.
+        thresh : float, optional
+            RMS values that exceed thresh are set to red. The default is 1.0.
+        Returns
+        -------
+        styler : TYPE
+            DESCRIPTION.
+        '''
+        if caption is not None:
+            styler.set_caption(caption)
+        # precesion for floating point columns
+        styler.format({('Mean', '$$v_x-u_x$$'): "{:.2f}",
+                       ('Mean', '$$v_y-u_y$$'): "{:.2f}",
+                       ('Sigma', '$$v_x-u_x$$'): "{:.2f}",
+                       ('Sigma', '$$v_y-u_y$$'): "{:.2f}",
+                       ('RMS', '$$v_x-u_x$$'): "{:.2f}",
+                       ('RMS', '$$v_y-u_y$$'): "{:.2f}"})
+        # Format specs for table
+        styler.set_table_styles([
+            {'selector': 'th.col_heading',
+             'props': 'text-align: center; background-color: lightblue; '
+             'border: 1px solid black; font-size: 12pt'},
+            {'selector': 'th.col_heading.level1',
+             'props': 'text-align: center; background-color: light blue; '
+             'border: 1px solid black; font-size: 12pt'},
+            {'selector': 'th.row_heading',
+             'props': 'background-color: lightblue; text-align: center; '
+             'border: 1px solid black; font-size: 12pt'},
+            {'selector': 'td',
+             'props': 'text-align: center; border: 1px solid black; '
+             'font-size: 12pt'},
+            {'selector': 'caption',
+             'props': 'font-size: 14pt; text-align: center; '
+             'caption-side: bottom'}]
+            )
+        # Use threshold to set RMS values that exceed thresh
+        styler.applymap(lambda v:  'color:red' if v > thresh
+                        else 'color:black;',
+                        subset=['RMS'])
+
+        return styler
     #
     # ===================== Coordinate Stuff ============================
     #
@@ -582,8 +647,8 @@ class cvPoints:
             if ax is None:
                 ax = plt.subplot(111)
             #
-            ax.plot(dx, color=xColor, label='$u_x-v_x$',  **kwargs)
-            ax.plot(dy, color=yColor, label='$u_y-v_y$',  **kwargs)
+            ax.plot(dx, color=xColor, label='$v_x-u_x$',  **kwargs)
+            ax.plot(dy, color=yColor, label='$v_y-u_y$',  **kwargs)
             ax.set_xlabel('Point', size=args[0].labelFontSize)
             ax.set_ylabel('$u_x-v_x, u_y-v_y$ (m/yr)',
                           size=args[0].labelFontSize)
@@ -807,5 +872,6 @@ class cvPoints:
         '''
         if x is None or y is None:
             x, y = self.xyAllm()
-        return {'minx': np.min(x) - pad, 'miny': np.min(y) - pad,
-                'maxx': np.max(x) + pad, 'maxy': np.max(y) + pad}
+        values = np.around([np.min(x) - pad, np.min(y) - pad,
+                            np.max(x) + pad, np.max(y) + pad], -2)
+        return dict(zip(['minx', 'miny', 'maxx', 'maxy'], values))

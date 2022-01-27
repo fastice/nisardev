@@ -78,6 +78,51 @@ def setKey(myKey, defaultValue, **kwargs):
     return defaultValue
 
 
+def statsStyle(styler, thresh=1.0):
+    '''
+    Setup the pandas style information to display a stats table
+
+    Parameters
+    ----------
+    styler : pandas.io.formats.style.Styler
+        style for stats table.
+    thresh : float, optional
+        RMS values that exceed thresh are set to red. The default is 1.0.
+
+    Returns
+    -------
+    styler : TYPE
+        DESCRIPTION.
+
+    '''
+    # precesion for f[ columns
+    styler.format({('Mean', '$$u_x-v_x$$'): "{:.2f}",
+                   ('Mean', '$$u_y-v_y$$'): "{:.2f}",
+                   ('Sigma', '$$u_x-v_x$$'): "{:.2f}",
+                   ('Sigma', '$$u_y-v_y$$'): "{:.2f}",
+                   ('RMS', '$$u_x-v_x$$'): "{:.2f}",
+                   ('RMS', '$$u_y-v_y$$'): "{:.2f}"})
+    # Formate specs for table
+    styler.set_table_styles([
+        {'selector': 'th.col_heading',
+         'props': 'text-align: center; background-color: lightblue; '
+         'border: 1px solid black; font-size: 12pt'},
+        {'selector': 'th.col_heading.level1',
+         'props': 'text-align: center; background-color: light blue; '
+         'border: 1px solid black; font-size: 12pt'},
+        {'selector': 'th.row_heading',
+         'props': 'background-color: lightblue; text-align: center; '
+         'border: 1px solid black; font-size: 12pt'},
+        {'selector': 'td',
+         'props': 'text-align: center; border: 1px solid black; '
+         'font-size: 12pt'}])
+    # Use threshold to set RMS values that exceed thresh
+    styler.applymap(lambda v:  'color:red' if v > thresh
+                    else 'color:black;',
+                    subset=['RMS'])
+    return styler
+
+
 def parseDatesFromName(dirName, dateTemplate, divider):
     '''
     Parse date from dir name with a template such as:
