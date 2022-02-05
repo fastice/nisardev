@@ -18,6 +18,7 @@ from osgeo import gdal
 import xarray as xr
 from dask.diagnostics import ProgressBar
 
+
 class nisarVelSeries(nisarBase2D):
     ''' This class creates objects to contain nisar velocity and/or error maps.
     The data can be pass in on init, or read from a geotiff.
@@ -53,6 +54,7 @@ class nisarVelSeries(nisarBase2D):
         self.noDataDict = {'vx': -2.0e9, 'vy': -2.0e9, 'vv': -1.0,
                            'ex': -1.0, 'ey': -1.0}
         self.gdalType = gdal.GDT_Float32  # data type for velocity products
+        self.nLayers = 0  # Number of time layers
 
     def myVariables(self, useVelocity, useErrors, readSpeed=False):
         '''
@@ -83,7 +85,7 @@ class nisarVelSeries(nisarBase2D):
     # Interpolation routines - to populate abstract methods from nisarBase2D
     # ------------------------------------------------------------------------
 
-    def interp(self, x, y, units='m', **kwargs):
+    def interp(self, x, y, date=None, units='m', **kwargs):
         '''
         Call appropriate interpolation method to interpolate myVars at x, y
         points.
@@ -101,7 +103,7 @@ class nisarVelSeries(nisarBase2D):
         '''
         if not self.checkUnits(units):
             return
-        return self.interpGeo(x, y, self.variables, units=units,
+        return self.interpGeo(x, y, self.variables, date=date, units=units,
                               **kwargs)
 
     def getMap(self, date, returnXR=False):
@@ -116,14 +118,8 @@ class nisarVelSeries(nisarBase2D):
         -------
         vx, vy
         '''
-        try:
-            if type(date) == str:
-                date = datetime.strptime(date, '%Y-%m-%d')
-            result = self.workingXR.sel(time=date, method='nearest')
-        except Exception:
-            print('Error: Either invalid date (datetime or "YYYY-MM-DD")')
-            print(f'Or date outside range: {min(self.workingXR.date)}, '
-                  f'{max(self.workingXR.date)}')
+        date = self.parseDate(date)  # Convert str to datetime if needed
+        result = self.workingXR.sel(time=date, method='nearest')
         # return either xr or np data
         if returnXR:
             return result
@@ -170,20 +166,24 @@ class nisarVelSeries(nisarBase2D):
         None.
         '''
         self.variables = self.myVariables(useVelocity, useErrors, readSpeed)
-        myVels = []
+        self.velMaps = []
         with ProgressBar():
             for fileName in fileNames:
                 myVel = nisarVel()
                 myVel.readDataFromTiff(fileName, useVelocity=useVelocity,
-                                       useErrors=useErrors, readSpeed=readSpeed,
+                                       useErrors=useErrors,
+                                       readSpeed=readSpeed,
                                        url=url, stackVar=stackVar,
                                        index1=index1, index2=index2,
                                        dateFormat=dateFormat)
-                myVels.append(myVel)
+                self.velMaps.append(myVel)
         # Combine individual bands
-        self.xr = xr.concat([x.xr for x in myVels], dim='time',
+        self.nLayers = len(fileNames)
+        self.xr = xr.concat([x.xr for x in self.velMaps], dim='time',
                             join='override', combine_attrs='drop')
         self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
+        self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
+        self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
 
     def subSetVel(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
@@ -203,34 +203,33 @@ class nisarVelSeries(nisarBase2D):
     # Dates routines.
     # ------------------------------------------------------------------------
 
-    def parseVelDatesFromFileName(self, fileNameBase, index1=4, index2=5,
-                                  dateFormat='%d%b%y'):
-        '''
-        Parse the dates from the directory name the velocity products are
-        stored in.
-        Parameters
-        ----------
-           fileNameBase : str
-            FileNameBase should be of the form
-            pattern.*.abc or pattern*.
-            The wildcard (*) will be filled with the values in myVars
-            e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
-        index1, index2 : ints, optional
-            location of dates in filename with seperated by _
-        dateFormat : str, optional
-            format code to strptime
-        Returns
-        -------
-        date: mid date.
-            First and last dates from meta file.
-        '''
-        baseNamePieces = os.path.basename(fileNameBase).split('_')
-        self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
-        self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
-        self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
-        x = self.plotFontSize
-        #
-        return self.midDate
+    # def parseVelDatesFromFileName(self, fileNameBase, index1=4, index2=5,
+    #                               dateFormat='%d%b%y'):
+    #     '''
+    #     Parse the dates from the directory name the velocity products are
+    #     stored in.
+    #     Parameters
+    #     ----------
+    #        fileNameBase : str
+    #         FileNameBase should be of the form
+    #         pattern.*.abc or pattern*.
+    #         The wildcard (*) will be filled with the values in myVars
+    #         e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
+    #     index1, index2 : ints, optional
+    #         location of dates in filename with seperated by _
+    #     dateFormat : str, optional
+    #         format code to strptime
+    #     Returns
+    #     -------
+    #     date: mid date.
+    #         First and last dates from meta file.
+    #     '''
+    #     baseNamePieces = os.path.basename(fileNameBase).split('_')
+    #     self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
+    #     self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
+    #     self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
+    #     #
+    #     return self.midDate
 
     # ------------------------------------------------------------------------
     # Ploting routines.

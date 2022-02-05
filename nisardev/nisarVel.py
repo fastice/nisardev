@@ -149,7 +149,8 @@ class nisarVel(nisarBase2D):
         else:
             skip = ['vv']  # Force skip
         self.readXR(fileNameBase, url=url, masked=True, stackVar=stackVar,
-                    time=self.midDate, skip=skip)
+                    time=self.midDate, skip=skip, time1=self.date1,
+                    time2=self.date2)
         # compute speed rather than download
         if not readSpeed and useVelocity:
             dv = xr.DataArray(np.sqrt(np.square(self.vx) + np.square(self.vy)),

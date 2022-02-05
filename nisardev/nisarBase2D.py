@@ -170,20 +170,25 @@ class nisarBase2D():
         lat lon) will automatically be mapped to xy as specificed by
         sourceEPSG=epsg.'''
         @functools.wraps(func)
-        def convertCoordsInner(inst, xin, yin, *args, **kwargs):
+        def convertCoordsInner(inst, xin, yin, *args, date=None, units='m',
+                               **kwargs):
             # No source EPSG so just pass original coords back
             if 'sourceEPSG' not in kwargs:
-                return func(inst, xin, yin, *args, **kwargs)
-            # Ensure epsg a string
-            sourceEPSG = str(kwargs['sourceEPSG'])
-            # See if xform already cached
-            if sourceEPSG not in inst.xforms:
-                inst.xforms[sourceEPSG] = \
-                    pyproj.Transformer.from_crs(f"EPSG:{sourceEPSG}",
-                                                f"EPSG:{inst.epsg}")
-            # Transform coordates
-            xout, yout = inst.xforms[sourceEPSG].transform(xin, yin)
-            return func(inst, xout, yout, *args, **kwargs)
+                xout, yout = xin, yin
+            else:
+                # Ensure epsg a string
+                sourceEPSG = str(kwargs['sourceEPSG'])
+                # See if xform already cached
+                if sourceEPSG not in inst.xforms:
+                    inst.xforms[sourceEPSG] = \
+                        pyproj.Transformer.from_crs(f"EPSG:{sourceEPSG}",
+                                                    f"EPSG:{inst.epsg}")
+                # Transform coordates
+                xout, yout = inst.xforms[sourceEPSG].transform(xin, yin)
+            # Unit conversion if needed
+            if units == 'km':
+                xout, yout = xout * 1000, yout * 1000
+            return func(inst, xout, yout, *args, date=date, **kwargs)
         return convertCoordsInner
 
     def checkUnits(self, units):
@@ -195,7 +200,7 @@ class nisarBase2D():
             return False
         return True
 
-    def interpGeo(self, x, y, myVars, units='m', **kwargs):
+    def interpGeo(self, x, y, myVars, date=None, units='m', **kwargs):
         '''
         Call appropriate interpolation method for each variable specified by
         myVars
@@ -216,41 +221,10 @@ class nisarBase2D():
         '''
         if not self.checkUnits(units):
             return
-        return self._interpNP(x, y, myVars, units=units, **kwargs)
-
-    # def _toInterp(self, x, y, units='m', **kwargs):
-    #     '''
-    #     Return xy values of coordinates that within the image bounds for
-    #     interpolation.
-    #     Parameters
-    #     ----------
-    #     x : np float array
-    #         x coordinates in m to interpolate to.
-    #     y : np float array
-    #         y coordinates in m to interpolate to.
-    #     Returns
-    #     -------
-    #     x1 : np float array
-    #         x coordinates for interpolation within image bounds.
-    #     y1 : np float array
-    #         y coordinates for interpolation within image bounds.
-    #     igood : TYPE
-    #         DESCRIPTION.
-    #     '''
-    #     # flatten, do bounds check, get locations of good (inbound) points.
-    #     x1, y1 = x.flatten(), y.flatten()
-    #     print('--',units)
-    #     if units == 'km':
-    #         x1 *= 1000.
-    #         y1 *= 1000.
-    #     xgood = np.logical_and(x1 >= self.xx[0], x1 <= self.xx[-1])
-    #     # ygood = np.logical_and(y1 >= self.yy[0], y1 <= self.yy[-1])
-    #     ygood = np.logical_and(y1 >= self.yy[-1], y1 <= self.yy[0])
-    #     igood = np.logical_and(xgood, ygood)
-    #     return x1[igood], y1[igood], igood
+        return self._interpNP(x, y, myVars, date=date, units=units, **kwargs)
 
     @_convertCoordinates
-    def _interpNP(self, x, y, myVars, units='m', **kwargs):
+    def _interpNP(self, x, y, myVars, date=None, units='m', **kwargs):
         '''
         Interpolate myVar(y,x) specified myVars (e.g., ['vx'..]) where myVars
         are nparrays.
@@ -269,30 +243,33 @@ class nisarBase2D():
         myResults : float np array
             Interpolated valutes from x,y locations.
         '''
-        if not self.checkUnits(units):
-            return
         if np.isscalar(x):
             x, y = [x], [y]
         xx1, yy1 = xr.DataArray(x), xr.DataArray(y)
-        if units == 'km':
-            xx1.data = xx1.data * 1000.
-            yy1.data = yy1.data * 1000.
         myXR = self.workingXR
         #
         nTime = myXR.shape[0]
         nBands = len(myVars)
         # Array to receive results
-        if nTime <= 1:
+        date = self.parseDate(date)
+        # No date or single time layer, so no time dimension
+        if nTime <= 1 or date is not None:
             myResults = np.zeros((nBands, *xx1.shape))
-        else:
+        else:  # Include time dimension
             myResults = np.zeros((nBands, nTime, *xx1.shape))
         # Interp by band
         for myVar, i in zip(myVars, range(0, len(myVars))):
-            myResults[i][:] = myXR.interp(x=xx1, y=yy1).sel(band=myVar).data
+            if date is None:
+                myResults[i][:] = myXR.sel(band=myVar).interp(
+                    x=xx1, y=yy1).data
+            else:
+                myResults[i][:] = myXR.sel(
+                    band=myVar).sel(time=date, method='nearest').interp(
+                    x=xx1, y=yy1).data
         return myResults
 
     def readXR(self, fileNameBase, url=False, masked=False, stackVar=None,
-               time=None, skip=[]):
+               time=None, time1=None, time2=None, skip=[]):
         ''' Use read data into rioxarray variable
         Parameters
         ----------
@@ -315,6 +292,10 @@ class nisarBase2D():
             self.xr = self.lazy_open_stack(items, stackVar)
             self.workingXR = self.xr
             self.parseGeoInfoStack()
+        if time1 is not None:
+            self.xr['time1'] = time1
+        if time2 is not None:
+            self.xr['time2'] = time2
         # Save variables
         self._mapVariables()
 
@@ -429,6 +410,26 @@ class nisarBase2D():
         #    self.parseGeoInfoStack()
         # else:
         self.parseGeoInfo()
+
+    def parseDate(self, date):
+        ''' Accept date as either datetime or YYYY-MM-DD
+        Parameters
+        ----------
+        date, str or datetime
+        Returns
+        -------
+        date in as datetime instance
+        '''
+        if date is None:
+            return date
+        try:
+            if type(date) == str:
+                date = datetime.strptime(date, '%Y-%m-%d')
+        except Exception:
+            print('Error: Either invalid date (datetime or "YYYY-MM-DD")')
+            print(f'Or date outside range: {min(self.workingXR.date)}, '
+                  f'{max(self.workingXR.date)}')
+        return date
 
     def datetime64ToDatetime(self, date64):
         return datetime.strptime(np.datetime_as_string(date64)[0:19],

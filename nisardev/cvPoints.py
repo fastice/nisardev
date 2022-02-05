@@ -20,7 +20,7 @@ class cvPoints:
     ''' cvpoints object - Has functionality for:
         input/output of cal/val points,
         filtering of points based on speed,
-        computing the differences with a veloity map
+        computing the differences with a velocity map
         computing the statistics of these differences, and
         plotting the differencs and loctions'''
 
@@ -274,21 +274,19 @@ class cvPoints:
     def _cvVels(func):
         ''' decorator to interpolate cv values from vel map '''
         @functools.wraps(func)
-        def cvV(*args, **kwargs):
+        def cvV(*args, date=None, **kwargs):
             x, y = func(*args)
-            result = args[1].interp(x, y, **kwargs)
-            iGood = np.isfinite(result[0])
-            result = np.vstack((result, iGood))
+            result = args[1].interp(x, y, date=date, **kwargs)
             return result
         return cvV
 
     @_cvVels
-    def vRangeData(self, vel, minv, maxv):
+    def vRangeData(self, vel, minv, maxv, date=None):
         ''' Get velocity from vel map for points in range (vmin,vmax).'''
         return self.xyVRangem(minv, maxv)
 
     @_cvVels
-    def vAllData(self, vel):
+    def vAllData(self, vel, date=None):
         ''' Get velocity from vel map for all points.'''
         return self.xyAllm()
 
@@ -324,9 +322,12 @@ class cvPoints:
         # the actual stats
 
         @functools.wraps(func)
-        def mstd(*args, table=False, **kwargs):
-            x, y, iPts, midDate = func(*args)
-            dvx, dvy, iGood = args[0].cvDifferences(x, y, iPts, args[1])
+        def mstd(*args, table=False, date=None, **kwargs):
+            x, y, iPts, midDate = func(*args, date=date)
+            dvx, dvy = args[0].cvDifferences(x, y, iPts, args[1], date=date)
+            iGood = np.isfinite(dvx)
+            dvx = dvx[iGood]
+            dvy = dvy[iGood]
             muX, muY = np.average(dvx), np.average(dvy)
             rmsX = np.sqrt(np.average(dvx**2))
             rmsY = np.sqrt(np.average(dvy**2))
@@ -339,12 +340,17 @@ class cvPoints:
         return mstd
 
     @_stats
-    def vRangeStats(self, vel, minv, maxv):
+    def vRangeStats(self, vel, minv, maxv, date=None):
         ''' get stats for cvpoints in range (minv,maxv) '''
         x, y = self.xyVRangem(minv, maxv)
         iPts = self.vRangeCVs(minv, maxv)
-        midDate = vel.midDate.strftime('%Y-%m-%d')
-        return x, y, iPts, midDate
+        if date is None:
+            dateReturn = vel.midDate.strftime('%Y-%m-%d')
+        else:
+            dateReturn = vel.datetime64ToDatetime(
+                vel.workingXR.time.sel(time=vel.parseDate(date),
+                                       method='nearest').data)
+        return x, y, iPts, dateReturn
 
     def statsStyle(self, styler, thresh=1.0, caption=None):
         '''
@@ -453,7 +459,7 @@ class cvPoints:
         x, y = self.xyZerom()
         return x/1000., y/1000.
 
-    def xyAllm(self ):
+    def xyAllm(self):
         '''
         Return x and y (m) coordinates of all CVs.
         Returns
@@ -501,13 +507,15 @@ class cvPoints:
     def _plotCVLocs(func):
         ''' Decorator for plotting locations in range (vmin,vmax). '''
         @functools.wraps(func)
-        def plotCVXY(*args, vel=None, ax=None, nSig=3, **kwargs):
+        def plotCVXY(*args, vel=None, ax=None, nSig=3, date=None, **kwargs):
             x, y = func(*args, nSig=nSig)
             #
             if vel is not None:
-                result = vel.interp(x, y)
-                iGood = result[-1]
+                result = vel.interp(x, y, date=date)
+                iGood = np.isfinite(result[:, 0])
+                # iGood = result[-1]
                 x, y = x[iGood], y[iGood]
+
             for keyw, value in zip(['marker', 'linestyle'], ['.', 'None']):
                 if keyw not in kwargs:
                     kwargs[keyw] = value
@@ -518,7 +526,7 @@ class cvPoints:
         return plotCVXY
 
     @_plotCVLocs
-    def plotVRangeCVLocs(self, minv, maxv, **kwargs):
+    def plotVRangeCVLocs(self, minv, maxv, date=None, **kwargs):
         '''
         plot x,y locations for points where maxv > v > min.
         Parameters
@@ -535,7 +543,7 @@ class cvPoints:
         return self.xyVRangem(minv, maxv)
 
     @_plotCVLocs
-    def plotAllCVLocs(self, **kwargs):
+    def plotAllCVLocs(self, date=None, **kwargs):
         '''
         plot x,y locations for points where maxv > v > min.
         Parameters
@@ -566,9 +574,12 @@ class cvPoints:
         '''
         x, y = self.xyVRangem(minv, maxv)  # get points in range
         iPts = self.vRangeCVs(minv, maxv)  # Just points in range (minv,vmaxv)
-        dvx, dvy, iGood = self.cvDifferences(x, y, iPts, vel)  # get diffs
-
+        dvx, dvy = self.cvDifferences(x, y, iPts, vel)  # get diffs
+        # Compute valid points and reduce all variables to good points
+        iGood = np.isfinite(dvx)
+        dvx, dvy = dvx[iGood], dvy[iGood]
         x, y = x[iGood], y[iGood]  # points in range with valid diffs
+        # status
         sigX, sigY = np.std(dvx), np.std(dvy)  # Sigmas
         # Find outliers
         iOut = np.logical_or(np.abs(dvx) > nSig * sigX,
@@ -612,12 +623,11 @@ class cvPoints:
             Axis for the plot.
         '''
         @functools.wraps(func)
-        def plotp(*args,  ax=None, xColor='r', yColor='b', legendKwargs={},
-                  **kwargs):
+        def plotp(*args,  ax=None, xColor='r', yColor='b', date=None,
+                  legendKwargs={}, **kwargs):
             x, y, iPts = func(*args)
-            dx, dy, iGood = dask.compute(args[0].cvDifferences(x, y, iPts,
-                                                               args[1]))[0]
-            # dx, dy, iGood = args[0].cvDifferences(x, y, iPts, args[1])
+            dx, dy = dask.compute(args[0].cvDifferences(x, y, iPts, args[1],
+                                                        date=date))[0]
             # defaults
             for keyw, value in zip(['marker', 'linestyle'], ['.', 'None']):
                 if keyw not in kwargs:
@@ -641,7 +651,7 @@ class cvPoints:
         return plotp
 
     @_plotDiffs
-    def plotVRangeCVDiffs(self, vel, minv, maxv, **kwargs):
+    def plotVRangeCVDiffs(self, vel, minv, maxv, date=None, **kwargs):
         '''
         Plot differences between c/v points and interpolated values from
         v in range (minv,maxv).
@@ -690,10 +700,12 @@ class cvPoints:
             return dx
 
         @functools.wraps(func)
-        def ploth(*args, axes=None, xColor='r', yColor='b', **kwargs):
+        def ploth(*args, axes=None, xColor='r', yColor='b', date=None,
+                  **kwargs):
             x, y, iPts = func(*args)
-            dx, dy, iGood = dask.compute(args[0].cvDifferences(x, y, iPts, 
-                                                               args[1]))[0]
+            dx, dy = dask.compute(args[0].cvDifferences(x, y, iPts, args[1],
+                                                        date=date))[0]
+            iGood = np.isfinite(dx)
             dx, dy = clipTail(dx), clipTail(dy)  # Set vals > 3sig to 3sig
             if axes is None:
                 _, axes = plt.subplots(1, 2)
@@ -715,7 +727,7 @@ class cvPoints:
         return ploth
 
     @_histDiffs
-    def plotVRangeHistDiffs(self, vel, minv, maxv):
+    def plotVRangeHistDiffs(self, vel, minv, maxv, date=None):
         '''
         Plot differences between c/v points and interpolated values from
         v in range (minv,maxv).
@@ -741,10 +753,10 @@ class cvPoints:
             points.
         '''
         x, y = self.xyVRangem(minv, maxv)
-        iPts = self.vRangeCVs(minv, maxv)
+        iPts = self.vRangeCVs(minv, maxv, date=date)
         return x, y, iPts
 
-    def cvDifferences(self, x, y, iPts, vel):
+    def cvDifferences(self, x, y, iPts, vel , date=None):
         '''
         Interpolate the velocity components from velocity map at the c/v
         point locations and return the differences (vx_map - vx_cv).
@@ -764,15 +776,12 @@ class cvPoints:
             vx difference for good points.
         dvy nparray
             vy difference for good points.
-        iGood : bool nparray
-            Good points.
         '''
-        vx, vy, vv = vel.interp(x, y)
+        vx, vy, vv = vel.interp(x, y, date=date)
         # subtract cvpoint values args[0] is self
         dvx, dvy = vx - self.vx[iPts], vy - self.vy[iPts]
-        iGood = np.isfinite(vx)
         # Return valid points and locations where good
-        return dvx[iGood], dvy[iGood], iGood
+        return dvx, dvy
 
     #
     # ===================== CV culling stuff  ==============================
