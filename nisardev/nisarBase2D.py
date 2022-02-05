@@ -10,11 +10,15 @@ from nisardev import myError
 import numpy as np
 import functools
 import xarray as xr
-from scipy.interpolate import RegularGridInterpolator
 import pyproj
 import dask
 import rioxarray
-
+import stackstac
+import os
+import matplotlib.pylab as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from datetime import datetime
+from dask.diagnostics import ProgressBar
 
 CHUNKSIZE = 512
 
@@ -36,23 +40,21 @@ class nisarBase2D():
         self.x0, self.y0 = x0, y0  # Origin (center of lower left pixel) in m
         self.dx, self.dy = dx, dy  # Pixel size
         self.xx, self.yy = [], []  # Coordinate of image axis ( F(y,x))
-        self.xGrid, self.yGrid = [], []  # Grid of coordinate for each pixel
+        self.xGrid, self.yGrid = None, None  # Grid of coordinate for each pix
         self.verbose = verbose  # Print progress messages
         self.epsg = epsg  # EPSG (sussm 3031 and 3413; should work for others)
         self.xr = None
         self.subset = None
+        self.workingXR = None
         self.flipY = True
         self.url = False
+        self.useStackstac = False
         self.xforms = {}  # Cached pyproj transforms
         dask.config.set(num_workers=numWorkers)
 
     # ------------------------------------------------------------------------
     # Setup abtract methods for child classes
     # ------------------------------------------------------------------------
-    @abstractmethod
-    def _setupInterp():
-        ''' Abstract setup interpolation method - define in child class. '''
-        pass
 
     @abstractmethod
     def interp():
@@ -61,11 +63,6 @@ class nisarBase2D():
 
     @abstractmethod
     def readDataFromTiff():
-        ''' Abstract read geotiff(s) - define in child class.'''
-        pass
-
-    @abstractmethod
-    def readDataFromURL():
         ''' Abstract read geotiff(s) - define in child class.'''
         pass
 
@@ -92,13 +89,7 @@ class nisarBase2D():
             print('xyGrid: geolocation variables not defined')
             return
         # setup arrays
-        self.xGrid = np.zeros((self.sy, self.sx))
-        self.yGrid = np.zeros((self.sy, self.sx))
-        # populate arrays
-        for i in range(0, self.sy):
-            self.xGrid[i, :] = self.xx
-        for i in range(0, self.sx):
-            self.yGrid[:, i] = self.yy
+        self.xGrid, self.yGrid = np.meshgrid(self.xx, self.yy, indexing='xy')
 
     # ------------------------------------------------------------------------
     # Projection routines
@@ -114,15 +105,14 @@ class nisarBase2D():
         corners : dict
             corners in xy coordinates: {'ll': {'x': xll, 'y': yll}...}.
         '''
-        nx, ny = self.sizeInPixels()
-        x0, y0 = self.originInM()
-        dx, dy = self.pixSizeInM()
         # Make sure geometry defined
-        if None in [nx, ny, x0, y0, dx, dy]:
-            myError(f'Geometry param not defined size {nx,ny}'
-                    ', origin {x0,y0}), or pix size {dx,dy}')
-        xll, yll = x0 - dx/2, y0 - dx/2
-        xur, yur = xll + nx * dx, yll + ny * dy
+        params = ['sx', 'sy', 'x0', 'y0', 'dx', 'dy']
+        if None in [getattr(self, x) for x in params]:
+            myError(f'Geometry param not defined size {self.nx,self.ny}, '
+                    'origin {self.x0,self.y0}), or pix size {self.dx,self.dy}')
+        # compute pixel corners from pixel centers
+        xll, yll = self.x0 - self.dx/2, self.y0 - self.dx/2
+        xur, yur = xll + self.sx * self.dx, yll + self.sy * self.dy
         xul, yul = xll, yur
         xlr, ylr = xur, yll
         corners = {'ll': {'x': xll, 'y': yll}, 'lr': {'x': xlr, 'y': ylr},
@@ -142,8 +132,6 @@ class nisarBase2D():
         '''
         # compute xy corners
         corners = self.computePixEdgeCornersXYM()
-        # xyproj = pyproj.Proj(f"EPSG:{self.epsg}")
-        # llproj = pyproj.Proj("EPSG:4326")
         xytollXform = pyproj.Transformer.from_crs(f"EPSG:{self.epsg}",
                                                   "EPSG:4326")
         llcorners = {}
@@ -157,7 +145,6 @@ class nisarBase2D():
     def getDomain(self, epsg):
         '''
         Return names of domain name based on epsg (antartica or greenland).
-
         Parameters
         ----------
         epsg : int
@@ -176,34 +163,12 @@ class nisarBase2D():
         return domain
 
     # -----------------------------------------------------------------------
-    # setup interpolation functions
-    # -----------------------------------------------------------------------
-
-    def _setupInterpolator(self, myVars):
-        '''
-        Set up interpolation for each variable specified by myVars.
-        Parameters
-        ----------
-        myVars : list of str
-            list of variable names as strings, e.g. ['vx',...].
-        Returns
-        -------
-        None.
-
-        '''
-        if len(self.xx) <= 0:
-            self.xyCoordinates()  # Setup coordinates if not done already.
-        # setup interpolation, Note y,x indexes for row colum
-        for myVar in myVars:
-            myV = getattr(self, myVar).compute()
-            setattr(self, f'{myVar}Interp',
-                    RegularGridInterpolator((self.yy, self.xx), myV,
-                                            method="linear"))
-
-    # -----------------------------------------------------------------------
     # Interpolate geo image.
     # -----------------------------------------------------------------------
     def _convertCoordinates(func):
+        ''' This will wrap interpolators so that the input coordinates (e.g.
+        lat lon) will automatically be mapped to xy as specificed by
+        sourceEPSG=epsg.'''
         @functools.wraps(func)
         def convertCoordsInner(inst, xin, yin, *args, **kwargs):
             # No source EPSG so just pass original coords back
@@ -221,7 +186,16 @@ class nisarBase2D():
             return func(inst, xout, yout, *args, **kwargs)
         return convertCoordsInner
 
-    def interpGeo(self, x, y, myVars, **kwargs):
+    def checkUnits(self, units):
+        '''
+        Check units return True for valid units. Print message for invalid.
+        '''
+        if units not in ['m', 'km']:
+            print('Invalid units: must be m or km')
+            return False
+        return True
+
+    def interpGeo(self, x, y, myVars, units='m', **kwargs):
         '''
         Call appropriate interpolation method for each variable specified by
         myVars
@@ -240,67 +214,43 @@ class nisarBase2D():
         np float array
             Interpolated valutes from x,y locations.
         '''
-        return self._interpNP(x, y, myVars, **kwargs)
+        if not self.checkUnits(units):
+            return
+        return self._interpNP(x, y, myVars, units=units, **kwargs)
 
-    def _toInterp(self, x, y, **kwargs):
-        '''
-        Return xy values of coordinates that within the image bounds for
-        interpolation.
-        Parameters
-        ----------
-        x : np float array
-            x coordinates in m to interpolate to.
-        y : np float array
-            y coordinates in m to interpolate to.
-        Returns
-        -------
-        x1 : np float array
-            x coordinates for interpolation within image bounds.
-        y1 : np float array
-            y coordinates for interpolation within image bounds.
-        igood : TYPE
-            DESCRIPTION.
-        '''
-        # flatten, do bounds check, get locations of good (inbound) points.
-        x1, y1 = x.flatten(), y.flatten()
-        xgood = np.logical_and(x1 >= self.xx[0], x1 <= self.xx[-1])
-        ygood = np.logical_and(y1 >= self.yy[0], y1 <= self.yy[-1])
-        igood = np.logical_and(xgood, ygood)
-        return x1[igood], y1[igood], igood
-
-    # def _interpXR(self, x, y, myVars, **kwargs):
+    # def _toInterp(self, x, y, units='m', **kwargs):
     #     '''
-    #     Interpolate myVar(y,x) specified myVars (e.g., ['vx'..]) where myVars
-    #     are xarrays. This routine has had little testing.
+    #     Return xy values of coordinates that within the image bounds for
+    #     interpolation.
     #     Parameters
     #     ----------
-    #     x: np float array
+    #     x : np float array
     #         x coordinates in m to interpolate to.
-    #     y: np float array
+    #     y : np float array
     #         y coordinates in m to interpolate to.
-    #     myVars : list of str
-    #         list of variable names as strings, e.g. ['vx',...].
-    #     **kwargs : TBD
-    #         Keyword pass through to interpolator.
     #     Returns
     #     -------
-    #     myResults : float np array
-    #         Interpolated valutes from x,y locations.
+    #     x1 : np float array
+    #         x coordinates for interpolation within image bounds.
+    #     y1 : np float array
+    #         y coordinates for interpolation within image bounds.
+    #     igood : TYPE
+    #         DESCRIPTION.
     #     '''
-    #     x1, y1, igood = self._toInterp(x, y)
-    #     x1xr = xr.DataArray(x1)
-    #     y1xr = xr.DataArray(y1)
-    #     #
-    #     myResults = [np.full(x1.transpose().shape, np.NaN) for x in myVars]
-    #     for myVar, i in zip(myVars, range(0, len(myVars))):
-    #         tmp = getattr(self,
-    #                       f'{myVar}').interp(x=x1xr, y=y1xr, method='linear')
-    #         myResults[i][igood] = tmp.values.flatten()
-    #         myResults[i] = np.reshape(myResults[i], x.shape)
-    #     #
-    #     return myResults
+    #     # flatten, do bounds check, get locations of good (inbound) points.
+    #     x1, y1 = x.flatten(), y.flatten()
+    #     print('--',units)
+    #     if units == 'km':
+    #         x1 *= 1000.
+    #         y1 *= 1000.
+    #     xgood = np.logical_and(x1 >= self.xx[0], x1 <= self.xx[-1])
+    #     # ygood = np.logical_and(y1 >= self.yy[0], y1 <= self.yy[-1])
+    #     ygood = np.logical_and(y1 >= self.yy[-1], y1 <= self.yy[0])
+    #     igood = np.logical_and(xgood, ygood)
+    #     return x1[igood], y1[igood], igood
+
     @_convertCoordinates
-    def _interpNP(self, x, y, myVars, **kwargs):
+    def _interpNP(self, x, y, myVars, units='m', **kwargs):
         '''
         Interpolate myVar(y,x) specified myVars (e.g., ['vx'..]) where myVars
         are nparrays.
@@ -319,18 +269,30 @@ class nisarBase2D():
         myResults : float np array
             Interpolated valutes from x,y locations.
         '''
-        x1, y1, igood = self._toInterp(x, y)
-        # Save good points
-        xy = np.array([y1, x1]).transpose()  # noqa
+        if not self.checkUnits(units):
+            return
+        if np.isscalar(x):
+            x, y = [x], [y]
+        xx1, yy1 = xr.DataArray(x), xr.DataArray(y)
+        if units == 'km':
+            xx1.data = xx1.data * 1000.
+            yy1.data = yy1.data * 1000.
+        myXR = self.workingXR
         #
-        myResults = [np.full(x.shape, np.NaN).flatten() for v in myVars]
+        nTime = myXR.shape[0]
+        nBands = len(myVars)
+        # Array to receive results
+        if nTime <= 1:
+            myResults = np.zeros((nBands, *xx1.shape))
+        else:
+            myResults = np.zeros((nBands, nTime, *xx1.shape))
+        # Interp by band
         for myVar, i in zip(myVars, range(0, len(myVars))):
-            myResults[i][igood] = getattr(self, f'{myVar}Interp')(xy)
-            myResults[i] = np.reshape(myResults[i], x.shape)
-        #
+            myResults[i][:] = myXR.interp(x=xx1, y=yy1).sel(band=myVar).data
         return myResults
 
-    def readXR(self, fileNameBase, url=False):
+    def readXR(self, fileNameBase, url=False, masked=False, stackVar=None,
+               time=None, skip=[]):
         ''' Use read data into rioxarray variable
         Parameters
         ----------
@@ -342,26 +304,76 @@ class nisarBase2D():
         '''
         self.url = url
         # Do a lazy open on the tiffs
-        self.xr = dask.compute(self.lazy_openTiff(fileNameBase, url=url))[0]
-        # get the geo info (origin, epsg, size, res)
-        self.parseGeoInfo(subset=False)
+        if stackVar is None:
+            self.xr = self.lazy_openTiff(fileNameBase, url=url, masked=masked,
+                                         time=time, skip=skip)
+            self.workingXR = self.xr
+            self.parseGeoInfo()
+        else:
+            items = self._construct_stac_items(fileNameBase, stackVar,
+                                               skip=skip, url=url)
+            self.xr = self.lazy_open_stack(items, stackVar)
+            self.workingXR = self.xr
+            self.parseGeoInfoStack()
         # Save variables
         self._mapVariables()
 
-    def _mapVariables(self, subset=False):
-        ''' Map the xr variables to band variables (e.g., vx, vy) '''
-        if subset:
-            myData = self.subset.data
-        else:
-            myData = self.xr.data
-        for myVar, bandData in zip(self.variables, myData):
-            if self.flipY:
-                setattr(self, myVar, np.flipud(bandData))
-            else:
-                setattr(self, myVar, bandData)
+    def loadRemote(self):
+        ''' Load the current XR, either full array if not subset,
+        or the subsetted version '''
+        with ProgressBar():
+            self.workingXR.load()
 
-    @dask.delayed
-    def lazy_openTiff(self, fileNameBase, masked=False, url=False, **kwargs):
+    def _construct_stac_items(self, fileNameBase, stackVar, url=True, skip=[]):
+        ''' construct STAC-style dictionaries of CMR urls for stackstac '''
+        bandTiff = fileNameBase
+        option = '?list_dir=no'
+        if url:
+            bandTiff = f'/vsicurl/{option}&url={fileNameBase}'
+        collection = bandTiff.split('/')[-3].replace('*', 'vv')
+        myId = os.path.basename(fileNameBase).replace('*', 'vv')
+        item = {'id': myId,
+                'collection': collection,
+                'properties': {'datetime': datetime.strptime(
+                    fileNameBase.split('/')[-2], '%Y.%m.%d').isoformat()},
+                'assets': {},
+                'bbox': stackVar['bbox']
+                }
+
+        for band in self.variables:
+            if band in skip:
+                continue
+            item['assets'][band] = {'href':
+                                    bandTiff.replace('*', band) + '.tif',
+                                    'type': 'application/x-geotiff'}
+        return [item]
+
+    def lazy_open_stack(self, items, stackVar):
+        ''' return stackstac xarray dataarray '''
+        dtype = 'float32'
+        print('this method should not be used until problems with '
+              'stackstac resolved')
+        return
+        fill_value = np.nan
+        self.useStackstac = True
+        #
+        self.epgs = stackVar['epsg']
+        da = stackstac.stack(items,
+                             assets=self.variables,
+                             epsg=stackVar['epsg'],
+                             resolution=stackVar['resolution'],
+                             fill_value=fill_value,
+                             dtype=dtype,
+                             xy_coords='center',
+                             chunksize=CHUNKSIZE,
+                             bounds=stackVar['bounds']
+                             )
+        da = da.rio.write_crs(f'epsg:{stackVar["epsg"]}')
+        return da
+
+    # @dask.delayed
+    def lazy_openTiff(self, fileNameBase, masked=False, url=False, time=None,
+                      skip=[], **kwargs):
         ''' Lazy open of a single velocity product
         Parameters
         ----------
@@ -372,6 +384,8 @@ class nisarBase2D():
         das = []
         option = '?list_dir=no'
         for band in self.variables:
+            if band in skip:
+                continue
             bandTiff = fileNameBase
             if url:
                 bandTiff = f'/vsicurl/{option}&url={fileNameBase}'
@@ -381,6 +395,9 @@ class nisarBase2D():
             da = rioxarray.open_rasterio(bandTiff, lock=True,
                                          default_name=fileNameBase,
                                          chunks=chunks, masked=masked)
+            if time is not None:
+                da = da.expand_dims(dim='time')
+                da['time'] = [time]
             da['band'] = [band]
             da['name'] = 'myData'
             da['_FillValue'] = self.noDataDict[band]
@@ -388,6 +405,13 @@ class nisarBase2D():
         # Concatenate bands (components)
         return xr.concat(das, dim='band', join='override',
                          combine_attrs='drop')
+
+    def _mapVariables(self):
+        ''' Map the xr variables to band variables (e.g., vx, vy) '''
+        for myVar in self.workingXR.band.data:
+            myVar = myVar.item()
+            bandData = np.squeeze(self.workingXR.sel(band=myVar).data)
+            setattr(self, myVar, bandData)
 
     def subSetData(self, bbox):
         ''' Subset dataArray using a box to crop limits
@@ -397,44 +421,51 @@ class nisarBase2D():
             crop area {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
         '''
         self.subset = self.xr.rio.clip_box(**bbox)
+        self.workingXR = self.subset
         # Save variables
-        self._mapVariables(subset=True)
+        self._mapVariables()
         # update the geo info (origin, epsg, size, res)
-        self.parseGeoInfo(subset=True)
+        # if self.useStackstac:
+        #    self.parseGeoInfoStack()
+        # else:
+        self.parseGeoInfo()
 
+    def datetime64ToDatetime(self, date64):
+        return datetime.strptime(np.datetime_as_string(date64)[0:19],
+                                 "%Y-%m-%dT%H:%M:%S")
     # ----------------------------------------------------------------------
     # Read geometry info
     # ----------------------------------------------------------------------
 
-    def parseGeoInfo(self, subset=False):
+    def _computeCoords(self, myXr):
+        self.sy, self.sx = myXr.shape[2:]
+        self.x0 = np.min(myXr.x).item()
+        self.y0 = np.min(myXr.y).item()
+        self.xx = myXr.x.data
+        self.yy = myXr.y.data
+
+    def parseGeoInfoStack(self):
+        ''' parse geoinfo for stackstac '''
+        myXr = self.workingXR
+        # get epsg
+        self.epsg = int(myXr.crs.split(":")[1])
+        gT = myXr.transform
+        self.dx, self.dy = abs(gT[0]), abs(gT[4])
+        #
+        self._computeCoords(myXr)
+
+    def parseGeoInfo(self):
         '''Parse geo info out of xr spatial ref'''
-        if subset:
-            myXr = self.subset
-        else:
-            myXr = self.xr
-        if myXr is None:
-            print('parseGeoInfo: xr not read yet')
-            return
+        myXr = self.workingXR
         # Get wkt and convert to crs
         self.wkt = myXr.spatial_ref.attrs['spatial_ref']
         myCRS = pyproj.CRS.from_wkt(self.wkt)
         # Save epsg
         self.epsg = myCRS.to_epsg()
         # get lower left corner, sx, sy, dx, dy
-        gT = [float(x) for x in myXr.spatial_ref.attrs['GeoTransform'].split()]
-        self.dx, self.dy = abs(gT[1]), abs(gT[5])
-        if gT[5] > 0:
-            self.flipY = False
-        self.x0 = np.min(myXr.x).item()
-        self.y0 = np.min(myXr.y).item()
-        self.sx, self.sy = len(myXr.x), len(myXr.y)
-        # coordinates
-        self.xx = myXr.coords['x'].values
-        if self.flipY:
-            self.yy = np.flip(myXr.coords['y'].values)
-        else:
-            self.yy = myXr.coords['y'].values
-        self.xyGrid()
+        gT = list(myXr.rio.transform())
+        self.dx, self.dy = abs(gT[0]), abs(gT[4])
+        self._computeCoords(myXr)
 
     # ----------------------------------------------------------------------
     # Output a band as geotif
@@ -493,6 +524,70 @@ class nisarBase2D():
         else:
             tiffName = f'{tiffRoot}.{myVar}'
         return f'{tiffName}.tif'
+
+    # ----------------------------------------------------------------------
+    # Plotting and display
+    # ----------------------------------------------------------------------
+
+    def displayVar(self, var, date=None, ax=None, plotFontSize=14,
+                   labelFontSize=12, titleFontSize=15, axisOff=False,
+                   vmin=0, vmax=7000, units='m',
+                   title=None, colorBarLabel='Speed (m/yr)', **kwargs):
+        '''
+        Use matplotlib to show velocity in a single subplot with a color
+        bar. Clip to absolute max set by maxv, though in practives percentile
+        will clip at a signficantly lower value.
+        Parameters
+        ----------
+        fig : matplot lib fig, optional
+            Pass in an existing figure. The default is None.
+        maxv : float or int, optional
+            max velocity. The default is 7000.
+        Returns
+        -------
+        fig : matplot lib fig
+            Figure used for plot.
+        ax : matplot lib ax
+            Axis used for plot.
+        '''
+        if not self.checkUnits(units):
+            return
+        if ax is None:
+            sx, sy = self.sizeInPixels()
+            fig, ax = plt.subplots(1, 1, constrained_layout=True,
+                                   figsize=(10.*sx/sy, 10.))
+        #
+        divider = make_axes_locatable(ax)  # Create space for colorbar
+        cbAx = divider.append_axes('right', size='5%', pad=0.05)
+        # Return if invalid var
+        if var not in self.variables:
+            print(f'{var} is not a valid, the choices are {self.variables}')
+            return
+        # Plot map
+        displayVar = self.workingXR.sel(band=var)
+        if date is not None:
+            if type(date) == str:
+                date = datetime.strptime(date, '%Y-%m-%d')
+            displayVar = displayVar.sel(time=date, method='nearest')
+        displayVar = np.squeeze(displayVar)
+        if title is None:
+            titleDate = self.datetime64ToDatetime(displayVar.time.data)
+            title = titleDate.strftime('%Y-%m-%d')
+        pos = ax.imshow(displayVar, vmin=vmin, vmax=vmax,
+                        extent=getattr(self, f'extentIn{units.title()}')(),
+                        **kwargs)
+        if axisOff:
+            ax.axis('off')
+        # labels and such.
+        cb = plt.colorbar(pos, cax=cbAx, orientation='vertical', extend='max')
+        cb.set_label(colorBarLabel, size=labelFontSize)
+        cb.ax.tick_params(labelsize=plotFontSize)
+        ax.set_xlabel('X (km)', size=labelFontSize)
+        ax.set_ylabel('Y (km)', size=labelFontSize)
+        ax.tick_params(axis='x', labelsize=plotFontSize)
+        ax.tick_params(axis='y', labelsize=plotFontSize)
+        ax.set_title(title, fontsize=titleFontSize)
+        return ax
 
     # ----------------------------------------------------------------------
     # Return  geometry params in m and km

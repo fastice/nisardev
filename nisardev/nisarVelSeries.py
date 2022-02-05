@@ -8,7 +8,7 @@ Created on Mon Feb 10 11:08:15 2020
 
 # geoimage.py
 import numpy as np
-from nisardev import nisarBase2D
+from nisardev import nisarBase2D, nisarVel
 import os
 from datetime import datetime
 # import matplotlib.pylab as plt
@@ -16,9 +16,9 @@ from datetime import datetime
 import math
 from osgeo import gdal
 import xarray as xr
+from dask.diagnostics import ProgressBar
 
-
-class nisarVel(nisarBase2D):
+class nisarVelSeries(nisarBase2D):
     ''' This class creates objects to contain nisar velocity and/or error maps.
     The data can be pass in on init, or read from a geotiff.
 
@@ -74,8 +74,6 @@ class nisarVel(nisarBase2D):
         myVars = []
         if useVelocity:
             myVars += ['vx', 'vy', 'vv']
-        # if readSpeed:
-        #    myVars += ['vv']
         if useErrors:
             myVars += ['ex', 'ey']
         self.variables = myVars
@@ -85,7 +83,7 @@ class nisarVel(nisarBase2D):
     # Interpolation routines - to populate abstract methods from nisarBase2D
     # ------------------------------------------------------------------------
 
-    def interp(self, x, y, **kwargs):
+    def interp(self, x, y, units='m', **kwargs):
         '''
         Call appropriate interpolation method to interpolate myVars at x, y
         points.
@@ -101,15 +99,44 @@ class nisarVel(nisarBase2D):
         npArray
             interpolate results for [nbands, npts].
         '''
-        return self.interpGeo(x, y, self.variables, **kwargs)
+        if not self.checkUnits(units):
+            return
+        return self.interpGeo(x, y, self.variables, units=units,
+                              **kwargs)
 
+    def getMap(self, date, returnXR=False):
+        '''
+        Extract map closest in time to date
+
+        Parameters
+        ----------
+        date : datetime, or str "YYYY-MM-DD"
+            date closest to desired layer
+        Returns
+        -------
+        vx, vy
+        '''
+        try:
+            if type(date) == str:
+                date = datetime.strptime(date, '%Y-%m-%d')
+            result = self.workingXR.sel(time=date, method='nearest')
+        except Exception:
+            print('Error: Either invalid date (datetime or "YYYY-MM-DD")')
+            print(f'Or date outside range: {min(self.workingXR.date)}, '
+                  f'{max(self.workingXR.date)}')
+        # return either xr or np data
+        if returnXR:
+            return result
+        else:
+            return [x.data for x in result] + [self.datetime64ToDatetime(
+                result[0].time['time'].data)]
     # ------------------------------------------------------------------------
     # I/O Routines
     # ------------------------------------------------------------------------
 
-    def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
-                         readSpeed=False, url=False, stackVar=None,
-                         index1=4, index2=5, dateFormat='%d%b%y'):
+    def readSeriesFromTiff(self, fileNames, useVelocity=True, useErrors=False,
+                           readSpeed=False, url=False, stackVar=None,
+                           index1=4, index2=5, dateFormat='%d%b%y'):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -142,24 +169,21 @@ class nisarVel(nisarBase2D):
         -------
         None.
         '''
-        self.parseVelDatesFromFileName(fileNameBase)
         self.variables = self.myVariables(useVelocity, useErrors, readSpeed)
-        if readSpeed:
-            skip = []
-        else:
-            skip = ['vv']  # Force skip
-        self.readXR(fileNameBase, url=url, masked=True, stackVar=stackVar,
-                    time=self.midDate, skip=skip)
-        # compute speed rather than download
-        if not readSpeed and useVelocity:
-            dv = xr.DataArray(np.sqrt(np.square(self.vx) + np.square(self.vy)),
-                              coords=[self.xr.y, self.xr.x], dims=['y', 'x'])
-            dv = dv.expand_dims(dim=['time', 'band'])
-            dv['band'] = ['vv']
-            dv['time'] = self.xr['time']
-            self.xr = xr.concat([self.xr, dv], dim='band', join='override',
-                                combine_attrs='drop')
-        self.fileNameBase = fileNameBase  # save filenameBase
+        myVels = []
+        with ProgressBar():
+            for fileName in fileNames:
+                myVel = nisarVel()
+                myVel.readDataFromTiff(fileName, useVelocity=useVelocity,
+                                       useErrors=useErrors, readSpeed=readSpeed,
+                                       url=url, stackVar=stackVar,
+                                       index1=index1, index2=index2,
+                                       dateFormat=dateFormat)
+                myVels.append(myVel)
+        # Combine individual bands
+        self.xr = xr.concat([x.xr for x in myVels], dim='time',
+                            join='override', combine_attrs='drop')
+        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
 
     def subSetVel(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
@@ -174,8 +198,6 @@ class nisarVel(nisarBase2D):
         None.
         '''
         self.subSetData(bbox)
-        if useVelocity:
-            self.vv = np.sqrt(np.square(self.vx) + np.square(self.vy))
 
     # ------------------------------------------------------------------------
     # Dates routines.
@@ -206,6 +228,7 @@ class nisarVel(nisarBase2D):
         self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
         self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
         self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
+        x = self.plotFontSize
         #
         return self.midDate
 
@@ -213,18 +236,21 @@ class nisarVel(nisarBase2D):
     # Ploting routines.
     # ------------------------------------------------------------------------
 
-    def displayVel(self, ax=None, component='vv',
-                   plotFontSize=plotFontSize,
-                   titleFontSize=titleFontSize,
-                   labelFontSize=labelFontSize,
-                   autoScale=True, axisOff=False,
-                   vmin=0, vmax=7000, percentile=100, **kwargs):
+    def displayVelForDate(self, date, ax=None, component='vv',
+                          plotFontSize=plotFontSize,
+                          titleFontSize=titleFontSize,
+                          labelFontSize=labelFontSize,
+                          autoScale=True, axisOff=False,
+                          vmin=0, vmax=7000, percentile=100, **kwargs):
         '''
-        Use matplotlib to show velocity in a single subplot with a color
-        bar. Clip to absolute max set by maxv, though in practives percentile
-        will clip at a signficantly lower value.
+         Use matplotlib to show a velocity layer selected by date.
+         Clip to absolute max set by maxv, though in practives percentile
+         will clip at a signficantly lower value.
+
         Parameters
         ----------
+        date : str or datetime
+            Approximate date to plot (nearest selected).
         ax : matplotlib axis, optional
             axes for plot. The default is None.
         component : str, optional
@@ -250,19 +276,25 @@ class nisarVel(nisarBase2D):
         Returns
         -------
         None.
+
         '''
-        # Compute display bounds
+        # Compute auto scale params
         if autoScale:
-            maxVel = min(np.percentile(
-                getattr(self, component)[np.isfinite(self.vv)], percentile),
-                vmax)
-            vmax = math.ceil(maxVel/100.) * 100.
-            minVel = max(np.percentile(
-                getattr(self, component)[np.isfinite(self.vv)],
-                100-percentile), vmin)
-            vmin = math.floor(minVel/100.) * 100.
-        # Display data
-        self.displayVar(component, ax=ax, plotFontSize=self.plotFontSize,
-                        labelFontSize=self.labelFontSize,
+            # select datae
+            myVar = self.getMap(date, returnXR=True)
+            myVar = myVar.sel(band=component).data
+            # compute max
+            maxVel = min(np.percentile(myVar[np.isfinite(myVar)], percentile),
+                         vmax)
+            #
+            vmax = math.ceil(maxVel/100.)*100.
+            minVel = max(np.percentile(myVar[np.isfinite(myVar)],
+                                       100 - percentile), vmin)
+            vmin = math.floor(minVel/100.)*100.
+        # Create plot
+        self.displayVar(component, date=date, ax=ax, plotFontSize=plotFontSize,
+                        labelFontSize=labelFontSize,
+                        titleFontSize=titleFontSize,
+                        axisOff=axisOff,
                         colorBarLabel='Speed (m/yr)', vmax=vmax, vmin=vmin,
                         **kwargs)

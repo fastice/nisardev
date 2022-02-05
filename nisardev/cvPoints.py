@@ -13,6 +13,7 @@ import matplotlib.pylab as plt
 from nisardev import myError
 from IPython.display import Markdown as md
 import pandas as pd
+import dask
 
 
 class cvPoints:
@@ -277,7 +278,7 @@ class cvPoints:
             x, y = func(*args)
             result = args[1].interp(x, y, **kwargs)
             iGood = np.isfinite(result[0])
-            result.append(iGood)
+            result = np.vstack((result, iGood))
             return result
         return cvV
 
@@ -452,7 +453,7 @@ class cvPoints:
         x, y = self.xyZerom()
         return x/1000., y/1000.
 
-    def xyAllm(self):
+    def xyAllm(self ):
         '''
         Return x and y (m) coordinates of all CVs.
         Returns
@@ -597,27 +598,6 @@ class cvPoints:
     # ===================== CV plot differences ===============================
     #
 
-    # def showDiffs(self, vel, fig, minv, maxv):
-    #     '''
-    #     Plot differences and histograms of differences
-    #     Parameters
-    #     ----------
-    #     vel : nisarVel
-    #         A nisarVel object
-    #     minv : float
-    #         minimum speed of desired range.
-    #     maxv : float
-    #         maximum speed of desired range.
-    #     Returns
-    #     -------
-    #     None
-    #         DESCRIPTION.
-    #     '''
-    #     figD = plt.figure(figsize=(14, 5))
-    #     self.plotVRangeCVDiffs(vel, figD, minv, maxv)
-    #     self.plotVRangeHistDiffs(vel, figD, minv, maxv)
-    #     plt.tight_layout()
-
     def _plotDiffs(func):
         '''
         Decorator for plotting differences between tie points and
@@ -635,7 +615,9 @@ class cvPoints:
         def plotp(*args,  ax=None, xColor='r', yColor='b', legendKwargs={},
                   **kwargs):
             x, y, iPts = func(*args)
-            dx, dy, iGood = args[0].cvDifferences(x, y, iPts, args[1])
+            dx, dy, iGood = dask.compute(args[0].cvDifferences(x, y, iPts,
+                                                               args[1]))[0]
+            # dx, dy, iGood = args[0].cvDifferences(x, y, iPts, args[1])
             # defaults
             for keyw, value in zip(['marker', 'linestyle'], ['.', 'None']):
                 if keyw not in kwargs:
@@ -710,7 +692,8 @@ class cvPoints:
         @functools.wraps(func)
         def ploth(*args, axes=None, xColor='r', yColor='b', **kwargs):
             x, y, iPts = func(*args)
-            dx, dy, iGood = args[0].cvDifferences(x, y, iPts, args[1])
+            dx, dy, iGood = dask.compute(args[0].cvDifferences(x, y, iPts, 
+                                                               args[1]))[0]
             dx, dy = clipTail(dx), clipTail(dy)  # Set vals > 3sig to 3sig
             if axes is None:
                 _, axes = plt.subplots(1, 2)
@@ -784,7 +767,7 @@ class cvPoints:
         iGood : bool nparray
             Good points.
         '''
-        vx, vy = vel.interp(x, y)
+        vx, vy, vv = vel.interp(x, y)
         # subtract cvpoint values args[0] is self
         dvx, dvy = vx - self.vx[iPts], vy - self.vy[iPts]
         iGood = np.isfinite(vx)
