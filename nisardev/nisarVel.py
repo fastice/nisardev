@@ -160,7 +160,29 @@ class nisarVel(nisarBase2D):
             dv['time'] = self.xr['time']
             self.xr = xr.concat([self.xr, dv], dim='band', join='override',
                                 combine_attrs='drop')
+        self.xr = self.xr.rename('VelocityMap')
         self.fileNameBase = fileNameBase  # save filenameBase
+        
+    def readDataFromNetCDF(self, cdfFile):
+        '''
+        Read a cdf file previously saved by a nisarVel instance.
+        Parameters
+        ----------
+        cdfFile : str
+            netcdf file name.
+        Returns
+        -------
+        None.
+
+        '''
+        # Read the date
+        self.readFromNetCDF(cdfFile)
+        # Initialize various variables.
+        self.nLayers = len(self.xr.time.data)
+        self.variables = list(self.xr.band.data)
+        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
+        self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
+        self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
 
     def subSetVel(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
@@ -218,7 +240,7 @@ class nisarVel(nisarBase2D):
                    plotFontSize=plotFontSize,
                    titleFontSize=titleFontSize,
                    labelFontSize=labelFontSize,
-                   autoScale=True, axisOff=False,
+                   autoScale=True, axisOff=False, midDate=True,
                    vmin=0, vmax=7000, percentile=100, **kwargs):
         '''
         Use matplotlib to show velocity in a single subplot with a color
@@ -264,6 +286,6 @@ class nisarVel(nisarBase2D):
             vmin = math.floor(minVel/100.) * 100.
         # Display data
         self.displayVar(component, ax=ax, plotFontSize=self.plotFontSize,
-                        labelFontSize=self.labelFontSize,
+                        labelFontSize=self.labelFontSize, midDate=midDate,
                         colorBarLabel='Speed (m/yr)', vmax=vmax, vmin=vmin,
                         **kwargs)

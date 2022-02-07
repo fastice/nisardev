@@ -47,7 +47,6 @@ class nisarBase2D():
         self.subset = None
         self.workingXR = None
         self.flipY = True
-        self.url = False
         self.useStackstac = False
         self.xforms = {}  # Cached pyproj transforms
         dask.config.set(num_workers=numWorkers)
@@ -95,7 +94,7 @@ class nisarBase2D():
     # Projection routines
     # ------------------------------------------------------------------------
 
-    def computePixEdgeCornersXYM(self):
+    def computePixEdgeCornersXYM(self, units='m'):
         '''
         Return dictionary with corner locations. Note unlike pixel
         centered xx, x0 etc values, these corners are defined as the outer
@@ -111,8 +110,13 @@ class nisarBase2D():
             myError(f'Geometry param not defined size {self.nx,self.ny}, '
                     'origin {self.x0,self.y0}), or pix size {self.dx,self.dy}')
         # compute pixel corners from pixel centers
+        self.checkUnits(units)
+        #
         xll, yll = self.x0 - self.dx/2, self.y0 - self.dx/2
         xur, yur = xll + self.sx * self.dx, yll + self.sy * self.dy
+        if units == 'km':
+            xll, yll = self._toKM(xll, yll)
+            xur, yur = self._toKM(xur, yur)
         xul, yul = xll, yur
         xlr, ylr = xur, yll
         corners = {'ll': {'x': xll, 'y': yll}, 'lr': {'x': xlr, 'y': ylr},
@@ -191,7 +195,7 @@ class nisarBase2D():
             return func(inst, xout, yout, *args, date=date, **kwargs)
         return convertCoordsInner
 
-    def checkUnits(self, units):
+    def _checkUnits(self, units):
         '''
         Check units return True for valid units. Print message for invalid.
         '''
@@ -219,7 +223,7 @@ class nisarBase2D():
         np float array
             Interpolated valutes from x,y locations.
         '''
-        if not self.checkUnits(units):
+        if not self._checkUnits(units):
             return
         return self._interpNP(x, y, myVars, date=date, units=units, **kwargs)
 
@@ -279,7 +283,6 @@ class nisarBase2D():
         url bool, optional
             Set true if fileNameBase is a link
         '''
-        self.url = url
         # Do a lazy open on the tiffs
         if stackVar is None:
             self.xr = self.lazy_openTiff(fileNameBase, url=url, masked=masked,
@@ -296,9 +299,30 @@ class nisarBase2D():
             self.xr['time1'] = time1
         if time2 is not None:
             self.xr['time2'] = time2
+        #
+        self.xr.rename('None')
         # Save variables
         self._mapVariables()
 
+    def readFromNetCDF(self, cdfFile):
+        ''' Load data from netcdf file '''
+        if '.nc' not in cdfFile:
+            cdfFile = f'{cdfFile}.nc'
+        xDS = xr.open_dataset(cdfFile)
+        # Pull the first variable that is not spatial_ref
+        for var in list(xDS.data_vars.keys()):
+            if var != 'spatial_ref':
+                self.xr = xr.DataArray(xDS[var])
+                break
+        try:
+            self.xr['spatial_ref'] = xDS['spatial_ref']
+        except Exception:
+            print('warning missing spatial_ref')
+        #
+        self.workingXR = self.xr
+        self.parseGeoInfo()
+        self._mapVariables()
+        
     def loadRemote(self):
         ''' Load the current XR, either full array if not subset,
         or the subsetted version '''
@@ -390,7 +414,7 @@ class nisarBase2D():
     def _mapVariables(self):
         ''' Map the xr variables to band variables (e.g., vx, vy) '''
         for myVar in self.workingXR.band.data:
-            myVar = myVar.item()
+            myVar = str(myVar)
             bandData = np.squeeze(self.workingXR.sel(band=myVar).data)
             setattr(self, myVar, bandData)
 
@@ -530,10 +554,25 @@ class nisarBase2D():
     # Plotting and display
     # ----------------------------------------------------------------------
 
+    def _dates(self, date, asString=False):
+        ''' Extract dates for a layer based on current date '''
+        date1 = self.datetime64ToDatetime(
+            self.workingXR.time.sel(time=date, method='nearest').time1.data)
+        date2 = self.datetime64ToDatetime(
+            self.workingXR.time.sel(time=date, method='nearest').time2.data)
+        midDate = self.datetime64ToDatetime(
+            self.workingXR.time.sel(time=date, method='nearest').data)
+        if asString:
+            date1 = date1.strftime('%Y-%m-%d')
+            date2 = date2.strftime('%Y-%m-%d')
+            midDate = midDate.strftime('%Y-%m-%d')
+        return midDate, date1, date2
+
     def displayVar(self, var, date=None, ax=None, plotFontSize=14,
                    labelFontSize=12, titleFontSize=15, axisOff=False,
                    vmin=0, vmax=7000, units='m',
-                   title=None, colorBarLabel='Speed (m/yr)', **kwargs):
+                   title=None, midDate=True, colorBarLabel='Speed (m/yr)',
+                   **kwargs):
         '''
         Use matplotlib to show velocity in a single subplot with a color
         bar. Clip to absolute max set by maxv, though in practives percentile
@@ -551,7 +590,7 @@ class nisarBase2D():
         ax : matplot lib ax
             Axis used for plot.
         '''
-        if not self.checkUnits(units):
+        if not self._checkUnits(units):
             return
         if ax is None:
             sx, sy = self.sizeInPixels()
@@ -566,25 +605,31 @@ class nisarBase2D():
             return
         # Plot map
         displayVar = self.workingXR.sel(band=var)
+        #
         if date is not None:
             if type(date) == str:
                 date = datetime.strptime(date, '%Y-%m-%d')
             displayVar = displayVar.sel(time=date, method='nearest')
-        displayVar = np.squeeze(displayVar)
+        else:  # Single band case, so pull its date
+            date = self.datetime64ToDatetime(displayVar.time[0].data)
+        # Create title from dates
         if title is None:
-            titleDate = self.datetime64ToDatetime(displayVar.time.data)
-            title = titleDate.strftime('%Y-%m-%d')
+            middleDate, date1, date2 = self._dates(date, asString=True)
+            if midDate:
+                title = middleDate
+            else:
+                title = f'{date1} - {date2}'
+        displayVar = np.squeeze(displayVar)
         pos = ax.imshow(displayVar, vmin=vmin, vmax=vmax,
-                        extent=getattr(self, f'extentIn{units.title()}')(),
-                        **kwargs)
+                        extent=self.extent(units=units), **kwargs)
         if axisOff:
             ax.axis('off')
         # labels and such.
         cb = plt.colorbar(pos, cax=cbAx, orientation='vertical', extend='max')
         cb.set_label(colorBarLabel, size=labelFontSize)
         cb.ax.tick_params(labelsize=plotFontSize)
-        ax.set_xlabel('X (km)', size=labelFontSize)
-        ax.set_ylabel('Y (km)', size=labelFontSize)
+        ax.set_xlabel(f'X ({units})', size=labelFontSize)
+        ax.set_ylabel(f'Y ({units})', size=labelFontSize)
         ax.tick_params(axis='x', labelsize=plotFontSize)
         ax.tick_params(axis='y', labelsize=plotFontSize)
         ax.set_title(title, fontsize=titleFontSize)
@@ -606,54 +651,24 @@ class nisarBase2D():
         '''
         return self.sx, self.sy
 
-    def _toKm(func):
-        '''
-        Decorator for unit conversion
-        Parameters
-        ----------
-        func : function
-            DESCRIPTION.
-        Returns
-        -------
-        float
-            Coordinates converted to km.
-        '''
-        @functools.wraps(func)
-        def convertKM(*args):
-            return [x*0.001 for x in func(*args)]
-        return convertKM
+    def _toKM(self, x, y):
+        return x/1000., y/1000.
 
-    def sizeInM(self):
+    def size(self, units='m'):
         ''' Return size in meters '''
+        self._checkUnits(units)
+        if units == 'km':
+            return self._toKM(self.sx*self.dx, self.sy*self.dy)
         return self.sx*self.dx, self.sy*self.dy
 
-    @_toKm
-    def sizeInKm(self):
-        '''
-        Using decorator _toKm convert size to km
-        Returns
-        -------
-        sx, sy: float
-            size in km.
-        '''
-        return self.sizeInM()
-
-    def originInM(self):
+    def origin(self, units='m'):
         ''' Return origin in meters '''
+        self._checkUnits(units)
+        if units == 'km':
+            return self._toKM(self.x0, self.y0)
         return self.x0, self.y0
 
-    @_toKm
-    def originInKm(self):
-        '''
-        Using decorator _toKm convert origin to km
-        Returns
-        -------
-        x0, y0: float
-            origin in km.
-        '''
-        return self.originInM()
-
-    def boundsInM(self):
+    def bounds(self, units='m'):
         '''
         Determine data bounds in meters
         Returns
@@ -667,11 +682,16 @@ class nisarBase2D():
         ymax : float
             max y (upper right) coordinate.
         '''
+        self._checkUnits(units)
         xmax = (self.x0 + (self.sx - 1) * self.dx)
-        ymax = (self.y0 + (self.sy-1)*self.dy)
-        return self.x0, self.y0, xmax, ymax
+        ymax = (self.y0 + (self.sy-1) * self.dy)
+        x0, y0 = self.x0, self.y0
+        if units == 'km':
+            x0, y0 = self._toKM(self.x0, self.y0)
+            xmax, ymax = self._toKM(xmax, ymax)
+        return x0, y0, xmax, ymax
 
-    def extentInM(self):
+    def extent(self, units='m'):
         '''
         Determine extent [xmin, xmax, ymin, ymax]
         Returns
@@ -685,45 +705,11 @@ class nisarBase2D():
         ymax : float
             max y (upper right) coordinate.
         '''
-        bounds = self.boundsInM()
+        self._checkUnits(units)
+        bounds = self.bounds(units=units)
         return bounds[0], bounds[2], bounds[1], bounds[3]
 
-    @_toKm
-    def extentInKm(self):
-        '''
-        Determine extent [xmin, xmax, ymin, ymax]
-        Returns
-        -------
-        xmin : float
-            min x (lower left) coordinate.
-        xmax : float
-            max x (upper right) coordinate.
-        ymin : float
-            min y (lower left) coordinate.
-        ymax : float
-            max y (upper right) coordinate.
-        '''
-        bounds = self.boundsInM()
-        return bounds[0], bounds[2], bounds[1], bounds[3]
-
-    @_toKm
-    def boundsInKm(self):
-        '''
-        Determine data bounds in km using _toKM decorator.
-        Returns
-        -------
-        xmin : float
-            min x (lower left) coordinate.
-        ymin : float
-            min y (lower left) coordinate.
-        xmax : float
-            max x (upper right) coordinate.
-        ymax : float
-            max y (upper right) coordinate.
-        '''
-        return self.boundsInM()
-
-    def pixSizeInM(self):
+    def pixSize(self, units='m'):
         '''
         Return pixel size in m
         Returns
@@ -733,17 +719,29 @@ class nisarBase2D():
         dy : float
             pixel size in y dimension.
         '''
+        self._checkUnits(units)
+        if units == 'km':
+            return self._toKM(self.dx, self.dy)
         return self.dx, self.dy
 
-    @_toKm
-    def pixSizeInKm(self):
-        '''
-        Return pixel size in km
+    def toNetCDF(self, cdfFile):
+        ''' Write existing working xarray to file. If a subset exists it will
+        be the subset, ow it will be the entire data set.
+        Parameters
+        ----------
+        cdfFile : str
+            netcdf file name. Will append .nc. if not present
         Returns
         -------
-        dx : float
-            pixel size in x dimension.
-        dy : float
-            pixel size in y dimension.
+        None.
         '''
-        return self.pixSizeInM()
+        if self.subset is None:
+            print('No subset present - set bbox={"minxx"...}')
+            return
+        if '.nc' not in cdfFile:
+            cdfFile = f'{cdfFile}.nc'
+        if os.path.exists(cdfFile):
+            os.remove(cdfFile)
+        # 
+        self.workingXR.to_netcdf(path=cdfFile)
+        return cdfFile

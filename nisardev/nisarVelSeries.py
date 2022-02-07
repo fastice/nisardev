@@ -101,7 +101,7 @@ class nisarVelSeries(nisarBase2D):
         npArray
             interpolate results for [nbands, npts].
         '''
-        if not self.checkUnits(units):
+        if not self._checkUnits(units):
             return
         return self.interpGeo(x, y, self.variables, date=date, units=units,
                               **kwargs)
@@ -181,6 +181,28 @@ class nisarVelSeries(nisarBase2D):
         self.nLayers = len(fileNames)
         self.xr = xr.concat([x.xr for x in self.velMaps], dim='time',
                             join='override', combine_attrs='drop')
+        self.xr = self.xr.rename('VelocitySeries')
+        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
+        self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
+        self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
+
+    def readSeriesFromNetCDF(self, cdfFile):
+        '''
+        Read a cdf file previously saved by a velSeries instance.
+        Parameters
+        ----------
+        cdfFile : str
+            netcdf file name.
+        Returns
+        -------
+        None.
+
+        '''
+        # Read the date
+        self.readFromNetCDF(cdfFile)
+        # Initialize various variables.
+        self.nLayers = len(self.xr.time.data)
+        self.variables = list(self.xr.band.data)
         self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
         self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
         self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
@@ -198,38 +220,6 @@ class nisarVelSeries(nisarBase2D):
         None.
         '''
         self.subSetData(bbox)
-
-    # ------------------------------------------------------------------------
-    # Dates routines.
-    # ------------------------------------------------------------------------
-
-    # def parseVelDatesFromFileName(self, fileNameBase, index1=4, index2=5,
-    #                               dateFormat='%d%b%y'):
-    #     '''
-    #     Parse the dates from the directory name the velocity products are
-    #     stored in.
-    #     Parameters
-    #     ----------
-    #        fileNameBase : str
-    #         FileNameBase should be of the form
-    #         pattern.*.abc or pattern*.
-    #         The wildcard (*) will be filled with the values in myVars
-    #         e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
-    #     index1, index2 : ints, optional
-    #         location of dates in filename with seperated by _
-    #     dateFormat : str, optional
-    #         format code to strptime
-    #     Returns
-    #     -------
-    #     date: mid date.
-    #         First and last dates from meta file.
-    #     '''
-    #     baseNamePieces = os.path.basename(fileNameBase).split('_')
-    #     self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
-    #     self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
-    #     self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
-    #     #
-    #     return self.midDate
 
     # ------------------------------------------------------------------------
     # Ploting routines.

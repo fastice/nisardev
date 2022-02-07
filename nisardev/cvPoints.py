@@ -79,6 +79,15 @@ class cvPoints:
         '''
         self.cvFile = cvFile
 
+    def _checkUnits(self, units):
+        '''
+        Check units return True for valid units. Print message for invalid.
+        '''
+        if units not in ['m', 'km']:
+            print('Invalid units: must be m or km')
+            return False
+        return True
+
     def checkCVFile(self):
         '''
         Check cvfile exists.
@@ -163,7 +172,8 @@ class cvPoints:
         #
         self.setSRS()
         self.nocull = np.ones(self.vx.shape, dtype=bool)  # set all to no cull
-        self.x, self.y = self.lltoxym(self.lat, self.lon)  # to xy coords
+        # to xy coords - x, y in meters internally
+        self.x, self.y = self.lltoxy(self.lat, self.lon, units='m')  
 
     def writeCVs(self, cvFileOut, fp=None, comment=None, keepOpen=False):
         '''
@@ -274,21 +284,21 @@ class cvPoints:
     def _cvVels(func):
         ''' decorator to interpolate cv values from vel map '''
         @functools.wraps(func)
-        def cvV(*args, date=None, **kwargs):
+        def cvV(*args, units='m', date=None, **kwargs):
             x, y = func(*args)
-            result = args[1].interp(x, y, date=date, **kwargs)
+            result = args[1].interp(x, y, units=units, date=date, **kwargs)
             return result
         return cvV
 
     @_cvVels
-    def vRangeData(self, vel, minv, maxv, date=None):
+    def vRangeData(self, vel, minv, maxv, units='m', date=None):
         ''' Get velocity from vel map for points in range (vmin,vmax).'''
-        return self.xyVRangem(minv, maxv)
+        return self.xyVRange(minv, maxv)
 
     @_cvVels
-    def vAllData(self, vel, date=None):
+    def vAllData(self, vel, units='m', date=None):
         ''' Get velocity from vel map for all points.'''
-        return self.xyAllm()
+        return self.xyAll()
 
     #
     # ===================== Stats Stuff ============================
@@ -323,6 +333,9 @@ class cvPoints:
 
         @functools.wraps(func)
         def mstd(*args, table=False, date=None, **kwargs):
+            if 'units' in kwargs:
+                print('units is not an option for this function')
+                return None
             x, y, iPts, midDate = func(*args, date=date)
             dvx, dvy = args[0].cvDifferences(x, y, iPts, args[1], date=date)
             iGood = np.isfinite(dvx)
@@ -342,7 +355,7 @@ class cvPoints:
     @_stats
     def vRangeStats(self, vel, minv, maxv, date=None):
         ''' get stats for cvpoints in range (minv,maxv) '''
-        x, y = self.xyVRangem(minv, maxv)
+        x, y = self.xyVRange(minv, maxv, units='m')
         iPts = self.vRangeCVs(minv, maxv)
         if date is None:
             dateReturn = vel.midDate.strftime('%Y-%m-%d')
@@ -404,7 +417,7 @@ class cvPoints:
     # ===================== Coordinate Stuff ============================
     #
 
-    def lltoxym(self, lat, lon):
+    def lltoxy(self, lat, lon, units='m'):
         '''
         Convert lat lon (deg) to x y (m)
         Parameters
@@ -420,8 +433,13 @@ class cvPoints:
         y : nparray
             y coordinate in m..
         '''
+        if not self._checkUnits(units):
+            return None, None
+        #
         if self.xyproj is not None:
             x, y = self.lltoxyXform.transform(lat, lon)
+            if units == 'km':
+                return self._toKM(x, y)
             return x, y
         else:
             myError("lltoxy: proj not defined")
@@ -437,7 +455,10 @@ class cvPoints:
         iZero = self.zeroCVs()
         return self.lat(iZero), self.lat(iZero)
 
-    def xyZerom(self):
+    def _toKM(self, x, y):
+        return x/1000., y/1000.
+
+    def xyZero(self, units='m'):
         '''
         Return x and y (m) coordinates of zero CVs.
         Returns
@@ -445,21 +466,15 @@ class cvPoints:
         x,y  : nparray
            x and y in m of zero CVs.
         '''
+        if not self._checkUnits(units):
+            return None, None
+        # find zero points
         iZero = self.zeroCVs()
+        if units == 'km':
+            return self._tokm(self.x[iZero], self.y[iZero])
         return self.x[iZero], self.y[iZero]
 
-    def xyZerokm(self):
-        '''
-        Return x and y (km) coordinates of zero CVs.
-        Returns
-        -------
-        x,y  : nparray
-           x and y in km of zero CVs.
-        '''
-        x, y = self.xyZerom()
-        return x/1000., y/1000.
-
-    def xyAllm(self):
+    def xyAll(self, units='m'):
         '''
         Return x and y (m) coordinates of all CVs.
         Returns
@@ -467,19 +482,14 @@ class cvPoints:
         x,y  : nparray
            x and y in m of all CVs.
         '''
+        if not self._checkUnits(units):
+            return None, None
+        #
+        if units == 'km':
+            return self._toKM(self.x, self.y)
         return self.x, self.y
 
-    def xyAllkm(self):
-        '''
-        Return x and y (km) coordinates of all CVs.
-        Returns
-        -------
-        x,y  : nparray
-           x and y in km of all CVs.
-        '''
-        return self.x/1000., self.y/1000.
-
-    def xyVRangem(self, minv, maxv):
+    def xyVRange(self, minv, maxv, units='m'):
         '''
         Return x and y (m) coordinates for pts with speed in range (minv,maxv).
         Returns
@@ -487,28 +497,20 @@ class cvPoints:
         x,y  : nparray
            x and y in m of all CVs.
         '''
+        if not self._checkUnits(units):
+            return None, None
+        # find points and return
         iRange = self.vRangeCVs(minv, maxv)
+        if units == 'km':
+            return self._toKM(self.x[iRange], self.y[iRange])
         return self.x[iRange], self.y[iRange]
-
-    def xyVRangekm(self, minv, maxv):
-        '''
-        Return x and y (km) coords for pts with speed in range (minv,maxv).
-        Returns
-        -------
-        x,y  : nparray
-           x and y in km of all CVs.
-        '''
-        x, y = self.xyVRangem(minv, maxv)
-        return x/1000., y/1000.
-    #
-    # ===================== Plot Cv locations Stuff ========================
-    #
 
     def _plotCVLocs(func):
         ''' Decorator for plotting locations in range (vmin,vmax). '''
         @functools.wraps(func)
-        def plotCVXY(*args, vel=None, ax=None, nSig=3, date=None, **kwargs):
-            x, y = func(*args, nSig=nSig)
+        def plotCVXY(*args, vel=None, ax=None, nSig=3, units='m', date=None,
+                     **kwargs):
+            x, y = func(*args, units=units, nSig=nSig)
             #
             if vel is not None:
                 result = vel.interp(x, y, date=date)
@@ -520,13 +522,13 @@ class cvPoints:
                 if keyw not in kwargs:
                     kwargs[keyw] = value
             if ax is None:
-                plt.plot(x*0.001, y*0.001, **kwargs)
+                plt.plot(x, y, **kwargs)
             else:
-                ax.plot(x*0.001, y*0.001,  **kwargs)
+                ax.plot(x, y,  **kwargs)
         return plotCVXY
 
     @_plotCVLocs
-    def plotVRangeCVLocs(self, minv, maxv, date=None, **kwargs):
+    def plotVRangeCVLocs(self, minv, maxv, units='m', date=None, **kwargs):
         '''
         plot x,y locations for points where maxv > v > min.
         Parameters
@@ -540,10 +542,12 @@ class cvPoints:
         None
             DESCRIPTION.
         '''
-        return self.xyVRangem(minv, maxv)
+        if not self._checkUnits(units):
+            return None, None
+        return self.xyVRange(minv, maxv, units=units)
 
     @_plotCVLocs
-    def plotAllCVLocs(self, date=None, **kwargs):
+    def plotAllCVLocs(self, units='m', date=None, **kwargs):
         '''
         plot x,y locations for points where maxv > v > min.
         Parameters
@@ -554,9 +558,11 @@ class cvPoints:
         None
             DESCRIPTION.
         '''
-        return self.xyAllm()
+        if not self._checkUnits(units):
+            return None, None
+        return self.xyAll(units=units)
 
-    def getOutlierLocs(self, minv, maxv, vel, nSig=3):
+    def getOutlierLocs(self, minv, maxv, vel, units='m', nSig=3):
         ''' Get outliers where difference in either velocity component is >
         nSig*sigma for points in range (minv,maxv)
         Parameters
@@ -572,9 +578,12 @@ class cvPoints:
         None
             DESCRIPTION.
         '''
-        x, y = self.xyVRangem(minv, maxv)  # get points in range
-        iPts = self.vRangeCVs(minv, maxv)  # Just points in range (minv,vmaxv)
-        dvx, dvy = self.cvDifferences(x, y, iPts, vel)  # get diffs
+        if not self._checkUnits(units):
+            return None, None
+        x, y = self.xyVRange(minv, maxv, units=units)  # get points in range
+        # Just points in range (minv,vmaxv)
+        iPts = self.vRangeCVs(minv, maxv, units=units)
+        dvx, dvy = self.cvDifferences(x, y, iPts, vel, units=units)
         # Compute valid points and reduce all variables to good points
         iGood = np.isfinite(dvx)
         dvx, dvy = dvx[iGood], dvy[iGood]
@@ -587,7 +596,7 @@ class cvPoints:
         return x[iOut], y[iOut]
 
     @_plotCVLocs
-    def plotOutlierLocs(self, minv, maxv, vel, nSig=3):
+    def plotOutlierLocs(self, minv, maxv, vel, units='m', nSig=3):
         ''' Plot outliers where difference in either velocity component is >
         nSig*sigma for points in range (minv,maxv)
         Parameters
@@ -603,7 +612,7 @@ class cvPoints:
         None
             DESCRIPTION.
         '''
-        return self.getOutlierLocs(minv, maxv, vel, nSig=nSig)
+        return self.getOutlierLocs(minv, maxv, vel, units=units, nSig=nSig)
 
     #
     # ===================== CV plot differences ===============================
@@ -625,6 +634,9 @@ class cvPoints:
         @functools.wraps(func)
         def plotp(*args,  ax=None, xColor='r', yColor='b', date=None,
                   legendKwargs={}, **kwargs):
+            if 'units' in kwargs:
+                print('units is not an option for this function')
+                return
             x, y, iPts = func(*args)
             dx, dy = dask.compute(args[0].cvDifferences(x, y, iPts, args[1],
                                                         date=date))[0]
@@ -674,7 +686,7 @@ class cvPoints:
         iPts : bool array
             points.
         '''
-        x, y = self.xyVRangem(minv, maxv)
+        x, y = self.xyVRange(minv, maxv)
         iPts = self.vRangeCVs(minv, maxv)
         return x, y, iPts
 
@@ -702,10 +714,13 @@ class cvPoints:
         @functools.wraps(func)
         def ploth(*args, axes=None, xColor='r', yColor='b', date=None,
                   **kwargs):
+            if 'units' in kwargs:
+                print('units is not an option for this function')
+                return
             x, y, iPts = func(*args)
             dx, dy = dask.compute(args[0].cvDifferences(x, y, iPts, args[1],
                                                         date=date))[0]
-            iGood = np.isfinite(dx)
+            # iGood = np.isfinite(dx)
             dx, dy = clipTail(dx), clipTail(dy)  # Set vals > 3sig to 3sig
             if axes is None:
                 _, axes = plt.subplots(1, 2)
@@ -752,11 +767,11 @@ class cvPoints:
         iPts : bool array
             points.
         '''
-        x, y = self.xyVRangem(minv, maxv)
-        iPts = self.vRangeCVs(minv, maxv, date=date)
+        x, y = self.xyVRange(minv, maxv)
+        iPts = self.vRangeCVs(minv, maxv)
         return x, y, iPts
 
-    def cvDifferences(self, x, y, iPts, vel , date=None):
+    def cvDifferences(self, x, y, iPts, vel, units='m', date=None):
         '''
         Interpolate the velocity components from velocity map at the c/v
         point locations and return the differences (vx_map - vx_cv).
@@ -777,7 +792,7 @@ class cvPoints:
         dvy nparray
             vy difference for good points.
         '''
-        vx, vy, vv = vel.interp(x, y, date=date)
+        vx, vy, vv = vel.interp(x, y, units=units, date=date)
         # subtract cvpoint values args[0] is self
         dvx, dvy = vx - self.vx[iPts], vy - self.vy[iPts]
         # Return valid points and locations where good
@@ -854,7 +869,7 @@ class cvPoints:
         if len(toCull) > 0:
             self.nocull[toCull] = False
 
-    def boundingBox(self, x=None, y=None, pad=10000.):
+    def boundingBox(self, units='m', x=None, y=None, pad=10000.):
         '''
         Compute Bounding box for tiepoints
         Returns
@@ -863,7 +878,7 @@ class cvPoints:
 
         '''
         if x is None or y is None:
-            x, y = self.xyAllm()
+            x, y = self.xyAll(units=units)
         values = np.around([np.min(x) - pad, np.min(y) - pad,
                             np.max(x) + pad, np.max(y) + pad], -2)
         return dict(zip(['minx', 'miny', 'maxx', 'maxy'], values))
