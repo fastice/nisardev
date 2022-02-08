@@ -203,6 +203,7 @@ class nisarVelSeries(nisarBase2D):
         # Initialize various variables.
         self.nLayers = len(self.xr.time.data)
         self.variables = list(self.xr.band.data)
+        # get times
         self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
         self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
         self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]

@@ -308,21 +308,24 @@ class nisarBase2D():
         ''' Load data from netcdf file '''
         if '.nc' not in cdfFile:
             cdfFile = f'{cdfFile}.nc'
-        xDS = xr.open_dataset(cdfFile)
+        xDS = xr.open_dataset(cdfFile, chunks='auto')
+        xDS['time1'] = xDS.time1.compute()
+        xDS['time2'] = xDS.time2.compute()
         # Pull the first variable that is not spatial_ref
         for var in list(xDS.data_vars.keys()):
             if var != 'spatial_ref':
-                self.xr = xr.DataArray(xDS[var])
+                self.xr = xDS[var]
                 break
         try:
             self.xr['spatial_ref'] = xDS['spatial_ref']
         except Exception:
             print('warning missing spatial_ref')
         #
+        self.subset = self.xr  # subset is whole array at this point.
         self.workingXR = self.xr
         self.parseGeoInfo()
         self._mapVariables()
-        
+
     def loadRemote(self):
         ''' Load the current XR, either full array if not subset,
         or the subsetted version '''
@@ -425,6 +428,13 @@ class nisarBase2D():
         bbox, dict
             crop area {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
         '''
+        # trap potential errors
+        xrBox = self._xrBoundingBox(self.xr)
+        if bbox['minx'] > xrBox['maxx'] or bbox['maxx'] < xrBox['minx'] or \
+           bbox['miny'] > xrBox['maxy'] or bbox['maxy'] < xrBox['miny']:
+            print('Crop failed: Subset region does not overlap data')
+            return
+        # Crop the data
         self.subset = self.xr.rio.clip_box(**bbox)
         self.workingXR = self.subset
         # Save variables
@@ -709,6 +719,28 @@ class nisarBase2D():
         bounds = self.bounds(units=units)
         return bounds[0], bounds[2], bounds[1], bounds[3]
 
+    def _xrBoundingBox(self, myXR):
+        ''' bounding box for an xr '''
+        extremes = [np.min(myXR.x.data), np.max(myXR.x.data),
+                    np.min(myXR.y.data), np.max(myXR.y.data)]
+        return dict(zip(['minx', 'maxx', 'miny', 'maxy'], extremes))
+
+    def boundingBox(self, units='m'):
+        '''
+        Return a bounding box used to crop
+        Parameters
+        ----------
+        unit : TYPE, optional
+            DESCRIPTION. The default is 'm'.
+
+        Returns
+        -------
+        dict
+           {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}.
+        '''
+        return dict(zip(['minx', 'maxx', 'miny', 'maxy'],
+                        self.extent(units=units)))
+
     def pixSize(self, units='m'):
         '''
         Return pixel size in m
@@ -742,6 +774,6 @@ class nisarBase2D():
             cdfFile = f'{cdfFile}.nc'
         if os.path.exists(cdfFile):
             os.remove(cdfFile)
-        # 
+        #
         self.workingXR.to_netcdf(path=cdfFile)
         return cdfFile

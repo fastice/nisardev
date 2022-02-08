@@ -162,7 +162,7 @@ class nisarVel(nisarBase2D):
                                 combine_attrs='drop')
         self.xr = self.xr.rename('VelocityMap')
         self.fileNameBase = fileNameBase  # save filenameBase
-        
+
     def readDataFromNetCDF(self, cdfFile):
         '''
         Read a cdf file previously saved by a nisarVel instance.
