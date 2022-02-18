@@ -162,6 +162,8 @@ class nisarVel(nisarBase2D):
                                 combine_attrs='drop')
         self.xr = self.xr.rename('VelocityMap')
         self.fileNameBase = fileNameBase  # save filenameBase
+        # force intial subset to entire image
+        self.subSetData(self.boundingBox(units='m'))
 
     def readDataFromNetCDF(self, cdfFile):
         '''
@@ -173,7 +175,6 @@ class nisarVel(nisarBase2D):
         Returns
         -------
         None.
-
         '''
         # Read the date
         self.readFromNetCDF(cdfFile)

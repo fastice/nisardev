@@ -85,7 +85,7 @@ class nisarVelSeries(nisarBase2D):
     # Interpolation routines - to populate abstract methods from nisarBase2D
     # ------------------------------------------------------------------------
 
-    def interp(self, x, y, date=None, units='m', **kwargs):
+    def interp(self, x, y, date=None, units='m', returnXR=False, **kwargs):
         '''
         Call appropriate interpolation method to interpolate myVars at x, y
         points.
@@ -104,7 +104,7 @@ class nisarVelSeries(nisarBase2D):
         if not self._checkUnits(units):
             return
         return self.interpGeo(x, y, self.variables, date=date, units=units,
-                              **kwargs)
+                              returnXR=returnXR, **kwargs)
 
     def getMap(self, date, returnXR=False):
         '''
@@ -119,12 +119,12 @@ class nisarVelSeries(nisarBase2D):
         vx, vy
         '''
         date = self.parseDate(date)  # Convert str to datetime if needed
-        result = self.workingXR.sel(time=date, method='nearest')
+        result = self.subset.sel(time=date, method='nearest')
         # return either xr or np data
         if returnXR:
             return result
         else:
-            return [x.data for x in result] + [self.datetime64ToDatetime(
+            return [x.data for x in result] + [self._datetime64ToDatetime(
                 result[0].time['time'].data)]
     # ------------------------------------------------------------------------
     # I/O Routines
@@ -177,14 +177,21 @@ class nisarVelSeries(nisarBase2D):
                                        index1=index1, index2=index2,
                                        dateFormat=dateFormat)
                 self.velMaps.append(myVel)
+        bBox = myVel.boundingBox(units='m')
         # Combine individual bands
         self.nLayers = len(fileNames)
         self.xr = xr.concat([x.xr for x in self.velMaps], dim='time',
                             join='override', combine_attrs='drop')
+        # This forces a subset=entire image, which will trigger initialization
+        # Spatial parameters derived from the first velMap
+        self.subSetVel(bBox)
         self.xr = self.xr.rename('VelocitySeries')
-        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
-        self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
-        self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
+        self.time = [self.datetime64ToDatetime(x)
+                     for x in self.xr.time.data]
+        self.time1 = [self.datetime64ToDatetime(x)
+                      for x in self.xr.time1.data]
+        self.time2 = [self.datetime64ToDatetime(x)
+                      for x in self.xr.time2.data]
 
     def readSeriesFromNetCDF(self, cdfFile):
         '''
@@ -204,9 +211,9 @@ class nisarVelSeries(nisarBase2D):
         self.nLayers = len(self.xr.time.data)
         self.variables = list(self.xr.band.data)
         # get times
-        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
-        self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
-        self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
+        self.time = [self._datetime64ToDatetime(x) for x in self.xr.time.data]
+        self.time1 = [self._datetime64ToDatetime(x) for x in self.xr.time1.data]
+        self.time2 = [self._datetime64ToDatetime(x) for x in self.xr.time2.data]
 
     def subSetVel(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
@@ -231,7 +238,8 @@ class nisarVelSeries(nisarBase2D):
                           titleFontSize=titleFontSize,
                           labelFontSize=labelFontSize,
                           autoScale=True, axisOff=False,
-                          vmin=0, vmax=7000, percentile=100, **kwargs):
+                          vmin=0, vmax=7000, percentile=100,
+                          colorBarLabel='Speed (m/yr)', **kwargs):
         '''
          Use matplotlib to show a velocity layer selected by date.
          Clip to absolute max set by maxv, though in practives percentile
@@ -270,7 +278,8 @@ class nisarVelSeries(nisarBase2D):
         '''
         # Compute auto scale params
         if autoScale:
-            # select datae
+            # select data
+            date = self.parseDate(date)
             myVar = self.getMap(date, returnXR=True)
             myVar = myVar.sel(band=component).data
             # compute max
@@ -286,5 +295,10 @@ class nisarVelSeries(nisarBase2D):
                         labelFontSize=labelFontSize,
                         titleFontSize=titleFontSize,
                         axisOff=axisOff,
-                        colorBarLabel='Speed (m/yr)', vmax=vmax, vmin=vmin,
+                        colorBarLabel=colorBarLabel, vmax=vmax, vmin=vmin,
                         **kwargs)
+
+    @classmethod
+    def reproduce(cls):
+        ''' Create and return a new instance of velocitySeries '''
+        return cls()

@@ -11,7 +11,6 @@ import pyproj
 import functools
 import matplotlib.pylab as plt
 from nisardev import myError
-from IPython.display import Markdown as md
 import pandas as pd
 import dask
 
@@ -78,15 +77,6 @@ class cvPoints:
         None.
         '''
         self.cvFile = cvFile
-
-    def _checkUnits(self, units):
-        '''
-        Check units return True for valid units. Print message for invalid.
-        '''
-        if units not in ['m', 'km']:
-            print('Invalid units: must be m or km')
-            return False
-        return True
 
     def checkCVFile(self):
         '''
@@ -173,7 +163,7 @@ class cvPoints:
         self.setSRS()
         self.nocull = np.ones(self.vx.shape, dtype=bool)  # set all to no cull
         # to xy coords - x, y in meters internally
-        self.x, self.y = self.lltoxy(self.lat, self.lon, units='m')  
+        self.x, self.y = self.lltoxy(self.lat, self.lon, units='m')
 
     def writeCVs(self, cvFileOut, fp=None, comment=None, keepOpen=False):
         '''
@@ -277,8 +267,9 @@ class cvPoints:
             Number of cv points.
         '''
         return sum(self.allCVs())
+
     #
-    # ===================== Interpolate Velocity Stuff ====================
+    # ---- Interpolate Velocity Stuff
     #
 
     def _cvVels(func):
@@ -301,23 +292,14 @@ class cvPoints:
         return self.xyAll()
 
     #
-    # ===================== Stats Stuff ============================
+    # ---- Stats Stuff
     #
 
     def _stats(func):
         ''' decorator for computing stats routines '''
         # create a table
-        def statsTable(muX, muY, sigX, sigY, rmsX, rmsY, nPts):
-            ''' make a markdown table '''
-            myTable = md(f'|Statistic|$u_x - v_x$ (m/yr)|$u_y - v_y$ (m/yr)|'
-                         f'N points|\n'
-                         f'|---|---|---|---|\n'
-                         f'|Mean|{muX:0.2}|{muY:0.2}|{nPts}|\n'
-                         f'|Std.Dev.|{sigX:0.2}|{sigY:0.2}|{nPts}|\n'
-                         f'|rms|{rmsX:0.2}|{rmsY:0.2}|{nPts}|')
-            return muX, muY, sigX, sigY, rmsX, rmsY, nPts, myTable
-
-        def pandasTable(muX, muY, sigX, sigY, rmsX, rmsY, nPts, midDate):
+        def pandasTable(muX, muY, sigX, sigY, rmsX, rmsY,  nPts,
+                        threshX, threshY, midDate):
             dfData = pd.DataFrame([[muX, muY, sigX, sigY, rmsX, rmsY]],
                                   columns=pd.MultiIndex.from_product(
                                   [['Mean', 'Sigma', 'RMS'],
@@ -327,20 +309,33 @@ class cvPoints:
                                     columns=pd.MultiIndex.from_product(
                                         [['Count'], ['n']]),
                                     index=pd.Index([midDate]))
-            df = pd.concat([dfData, dfPoints], axis=1)
-            return muX, muY, sigX, sigY, rmsX, rmsY, nPts, df
+            dfThresh = pd.DataFrame([[threshX, threshY]],
+                                    columns=pd.MultiIndex.from_product(
+                                        [['Threshold'], ['x', 'y']]),
+                                    index=pd.Index([midDate]))
+            df = pd.concat([dfData, dfPoints, dfThresh], axis=1)
+            return muX, muY, sigX, sigY, rmsX, rmsY, nPts, threshX, threshY, df
         # the actual stats
 
         @functools.wraps(func)
-        def mstd(*args, table=False, date=None, **kwargs):
+        def mstd(*args, table=False, date=None, absError=1,
+                 percentError=0.03, **kwargs):
             if 'units' in kwargs:
                 print('units is not an option for this function')
                 return None
             x, y, iPts, midDate = func(*args, date=date)
             dvx, dvy = args[0].cvDifferences(x, y, iPts, args[1], date=date)
             iGood = np.isfinite(dvx)
+            #
             dvx = dvx[iGood]
             dvy = dvy[iGood]
+            #
+            threshX = np.sqrt(np.mean(
+                (np.ones(iGood.shape)[iGood] * absError)**2 +
+                (args[0].vx[iPts][iGood] * percentError)**2))
+            threshY = np.sqrt(np.mean(
+                (np.ones(iGood.shape)[iGood] * absError)**2 +
+                (args[0].vy[iPts][iGood] * percentError)**2))
             muX, muY = np.average(dvx), np.average(dvy)
             rmsX = np.sqrt(np.average(dvx**2))
             rmsY = np.sqrt(np.average(dvy**2))
@@ -349,7 +344,7 @@ class cvPoints:
                 return muX, muY, sigX, sigY, rmsX, rmsY, sum(iGood)
             else:
                 return pandasTable(muX, muY, sigX, sigY, rmsX, rmsY,
-                                   sum(iGood), midDate)
+                                   sum(iGood), threshX, threshY, midDate)
         return mstd
 
     @_stats
@@ -361,8 +356,8 @@ class cvPoints:
             dateReturn = vel.midDate.strftime('%Y-%m-%d')
         else:
             dateReturn = vel.datetime64ToDatetime(
-                vel.workingXR.time.sel(time=vel.parseDate(date),
-                                       method='nearest').data)
+                vel.subset.time.sel(time=vel.parseDate(date),
+                                    method='nearest').data)
         return x, y, iPts, dateReturn
 
     def statsStyle(self, styler, thresh=1.0, caption=None):
@@ -388,7 +383,10 @@ class cvPoints:
                        ('Sigma', '$$v_x-u_x$$'): "{:.2f}",
                        ('Sigma', '$$v_y-u_y$$'): "{:.2f}",
                        ('RMS', '$$v_x-u_x$$'): "{:.2f}",
-                       ('RMS', '$$v_y-u_y$$'): "{:.2f}"})
+                       ('RMS', '$$v_y-u_y$$'): "{:.2f}",
+                       ('Count', 'n'): "{:d}",
+                       ('Threshold', 'x'): "{:.2f}",
+                       ('Threshold', 'y'): "{:.2f}"})
         # Format specs for table
         styler.set_table_styles([
             {'selector': 'th.col_heading',
@@ -408,13 +406,20 @@ class cvPoints:
              'caption-side: bottom'}]
             )
         # Use threshold to set RMS values that exceed thresh
-        styler.applymap(lambda v:  'color:red' if v > thresh
-                        else 'color:black;',
-                        subset=['RMS'])
+        #
 
+        def setColors(s, column='Count'):
+            #
+            result = ['color:black']*9
+            if s.iloc[4] > s.iloc[7]:
+                result[4] = 'color:red;'
+            if s.iloc[5] > s.iloc[8]:
+                result[5] = 'color:red;'
+            return result
+        styler.apply(setColors, axis=1, column='Count')
         return styler
     #
-    # ===================== Coordinate Stuff ============================
+    # ---- Coordinate Stuff
     #
 
     def lltoxy(self, lat, lon, units='m'):
@@ -504,6 +509,10 @@ class cvPoints:
         if units == 'km':
             return self._toKM(self.x[iRange], self.y[iRange])
         return self.x[iRange], self.y[iRange]
+
+    #
+    # ===================== Plot Locations ============================
+    #
 
     def _plotCVLocs(func):
         ''' Decorator for plotting locations in range (vmin,vmax). '''
@@ -882,3 +891,16 @@ class cvPoints:
         values = np.around([np.min(x) - pad, np.min(y) - pad,
                             np.max(x) + pad, np.max(y) + pad], -2)
         return dict(zip(['minx', 'miny', 'maxx', 'maxy'], values))
+
+#
+# ---- Error Checking
+#
+
+    def _checkUnits(self, units):
+        '''
+        Check units return True for valid units. Print message for invalid.
+        '''
+        if units not in ['m', 'km']:
+            print('Invalid units: must be m or km')
+            return False
+        return True
