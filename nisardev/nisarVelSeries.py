@@ -124,7 +124,7 @@ class nisarVelSeries(nisarBase2D):
         if returnXR:
             return result
         else:
-            return [x.data for x in result] + [self._datetime64ToDatetime(
+            return [x.data for x in result] + [self.datetime64ToDatetime(
                 result[0].time['time'].data)]
     # ------------------------------------------------------------------------
     # I/O Routines
@@ -182,6 +182,8 @@ class nisarVelSeries(nisarBase2D):
         self.nLayers = len(fileNames)
         self.xr = xr.concat([x.xr for x in self.velMaps], dim='time',
                             join='override', combine_attrs='drop')
+        # ensure that properly sorted in time
+        self.xr = self.xr.sortby(self.xr.time)
         # This forces a subset=entire image, which will trigger initialization
         # Spatial parameters derived from the first velMap
         self.subSetVel(bBox)
@@ -192,6 +194,24 @@ class nisarVelSeries(nisarBase2D):
                       for x in self.xr.time1.data]
         self.time2 = [self.datetime64ToDatetime(x)
                       for x in self.xr.time2.data]
+
+    def _addSpeedSeries(self):
+        ''' Add speed if only have vx and vy '''
+        dv = xr.DataArray(np.sqrt(np.square(self.vx) + np.square(self.vy)),
+                          coords=[self.xr.time, self.xr.y, self.xr.x],
+                          dims=['time', 'y', 'x'])
+        # add band for vv
+        dv = dv.expand_dims(dim=['band'])
+        dv['band'] = ['vv']
+        dv['time'] = self.xr['time']
+        dv['name'] = self.xr['name']
+        # Add to vx, vy xr
+        self.xr = xr.concat([self.xr, dv], dim='band', join='override',
+                            combine_attrs='drop')
+        #
+        if 'vv' not in self.variables:
+            self.variables.append('vv')
+        self._mapVariables()
 
     def readSeriesFromNetCDF(self, cdfFile):
         '''
@@ -210,10 +230,16 @@ class nisarVelSeries(nisarBase2D):
         # Initialize various variables.
         self.nLayers = len(self.xr.time.data)
         self.variables = list(self.xr.band.data)
+        if 'vv' not in self.variables and 'vx' in self.variables and \
+                'vy' in self.variables:
+
+            self._addSpeedSeries()
+            self.subset = self.xr
+
         # get times
-        self.time = [self._datetime64ToDatetime(x) for x in self.xr.time.data]
-        self.time1 = [self._datetime64ToDatetime(x) for x in self.xr.time1.data]
-        self.time2 = [self._datetime64ToDatetime(x) for x in self.xr.time2.data]
+        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
+        self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
+        self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
 
     def subSetVel(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
@@ -233,7 +259,7 @@ class nisarVelSeries(nisarBase2D):
     # Ploting routines.
     # ------------------------------------------------------------------------
 
-    def displayVelForDate(self, date, ax=None, component='vv',
+    def displayVelForDate(self, date=None, ax=None, band='vv',
                           plotFontSize=plotFontSize,
                           titleFontSize=titleFontSize,
                           labelFontSize=labelFontSize,
@@ -251,7 +277,7 @@ class nisarVelSeries(nisarBase2D):
             Approximate date to plot (nearest selected).
         ax : matplotlib axis, optional
             axes for plot. The default is None.
-        component : str, optional
+        band : str, optional
             component to plot (any of loaded variables). The default is 'vv'.
         plotFontSize : int, optional
             Font size for plot. The default is plotFontSize.
@@ -278,20 +304,11 @@ class nisarVelSeries(nisarBase2D):
         '''
         # Compute auto scale params
         if autoScale:
-            # select data
-            date = self.parseDate(date)
-            myVar = self.getMap(date, returnXR=True)
-            myVar = myVar.sel(band=component).data
-            # compute max
-            maxVel = min(np.percentile(myVar[np.isfinite(myVar)], percentile),
-                         vmax)
-            #
-            vmax = math.ceil(maxVel/100.)*100.
-            minVel = max(np.percentile(myVar[np.isfinite(myVar)],
-                                       100 - percentile), vmin)
-            vmin = math.floor(minVel/100.)*100.
+            vmin, vmax = self.autoScaleRange(band, date, vmin, vmax,
+                                             percentile)
+
         # Create plot
-        self.displayVar(component, date=date, ax=ax, plotFontSize=plotFontSize,
+        self.displayVar(band, date=date, ax=ax, plotFontSize=plotFontSize,
                         labelFontSize=labelFontSize,
                         titleFontSize=titleFontSize,
                         axisOff=axisOff,

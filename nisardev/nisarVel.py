@@ -107,6 +107,24 @@ class nisarVel(nisarBase2D):
     # I/O Routines
     # ------------------------------------------------------------------------
 
+    def _addSpeed(self):
+        ''' Add speed if only have vx and vy '''
+        # Compute speed
+        dv = xr.DataArray(np.sqrt(np.square(self.vx) + np.square(self.vy)),
+                          coords=[self.xr.y, self.xr.x], dims=['y', 'x'])
+        # setup band as vv
+        dv = dv.expand_dims(dim=['time', 'band'])
+        dv['band'] = ['vv']
+        dv['time'] = self.xr['time']
+        dv['name'] = self.xr['name']
+        # Add to existing xr with vx and vy
+        self.xr = xr.concat([self.xr, dv], dim='band', join='override',
+                            combine_attrs='drop')
+        #
+        if 'vv' not in self.variables:
+            self.variables.append('vv')
+        self._mapVariables()
+
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
                          readSpeed=False, url=False, stackVar=None,
                          index1=4, index2=5, dateFormat='%d%b%y'):
@@ -151,15 +169,11 @@ class nisarVel(nisarBase2D):
         self.readXR(fileNameBase, url=url, masked=True, stackVar=stackVar,
                     time=self.midDate, skip=skip, time1=self.date1,
                     time2=self.date2)
+
         # compute speed rather than download
         if not readSpeed and useVelocity:
-            dv = xr.DataArray(np.sqrt(np.square(self.vx) + np.square(self.vy)),
-                              coords=[self.xr.y, self.xr.x], dims=['y', 'x'])
-            dv = dv.expand_dims(dim=['time', 'band'])
-            dv['band'] = ['vv']
-            dv['time'] = self.xr['time']
-            self.xr = xr.concat([self.xr, dv], dim='band', join='override',
-                                combine_attrs='drop')
+            self._addSpeed()
+        #
         self.xr = self.xr.rename('VelocityMap')
         self.fileNameBase = fileNameBase  # save filenameBase
         # force intial subset to entire image
@@ -181,9 +195,14 @@ class nisarVel(nisarBase2D):
         # Initialize various variables.
         self.nLayers = len(self.xr.time.data)
         self.variables = list(self.xr.band.data)
-        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
-        self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
-        self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
+        if 'vv' not in self.variables and 'vx' in self.variables and \
+                'vy' in self.variables:   
+            self._addSpeed()
+            self.subset = self.xr
+        # set times   
+        self.time = [np.datetime64(self.xr.time.item(), 'ns')]
+        self.time1 = [np.datetime64(self.xr.time1.item(), 'ns')]
+        self.time2 = [np.datetime64(self.xr.time2.item(), 'ns')]
 
     def subSetVel(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
@@ -237,11 +256,11 @@ class nisarVel(nisarBase2D):
     # Ploting routines.
     # ------------------------------------------------------------------------
 
-    def displayVel(self, ax=None, component='vv',
+    def displayVel(self, ax=None, band='vv',
                    plotFontSize=plotFontSize,
                    titleFontSize=titleFontSize,
                    labelFontSize=labelFontSize,
-                   autoScale=True, axisOff=False, midDate=True,
+                   scale='linear', axisOff=False, midDate=True,
                    vmin=0, vmax=7000, percentile=100, **kwargs):
         '''
         Use matplotlib to show velocity in a single subplot with a color
@@ -251,16 +270,16 @@ class nisarVel(nisarBase2D):
         ----------
         ax : matplotlib axis, optional
             axes for plot. The default is None.
-        component : str, optional
-            component to plot (any of loaded variables). The default is 'vv'.
+        band : str, optional
+            band to plot (any of loaded variables). The default is 'vv'.
         plotFontSize : int, optional
             Font size for plot. The default is plotFontSize.
         titleFontSize : TYPE, optional
             Font size for title. The default is titleFontSize.
         labelFontSize : TYPE, optional
             Font size for labels. The default is labelFontSize.
-        autoScale : bool, optional
-            Autoscale plot range,but not exceed vmin,vmax. The default is True.
+        scale : str, optional
+            Options are "linear" and "log" The default is linear.
         axisOff : TYPE, optional
             Turn axes off. The default is False.
         vmax : number, optional
@@ -276,17 +295,16 @@ class nisarVel(nisarBase2D):
         None.
         '''
         # Compute display bounds
-        if autoScale:
-            maxVel = min(np.percentile(
-                getattr(self, component)[np.isfinite(self.vv)], percentile),
-                vmax)
-            vmax = math.ceil(maxVel/100.) * 100.
-            minVel = max(np.percentile(
-                getattr(self, component)[np.isfinite(self.vv)],
-                100-percentile), vmin)
-            vmin = math.floor(minVel/100.) * 100.
+        if scale == 'linear':
+            # clip to percentile value
+            vmin, vmax = self.autoScaleRange(band, None, vmin, vmax, percentile)
+        elif scale == 'log':
+            vmin = max(.1, vmin)  # Don't allow to small a value
+        else:
+            print('Invalid scale option, use linear or log')
+            return
         # Display data
-        self.displayVar(component, ax=ax, plotFontSize=self.plotFontSize,
+        self.displayVar(band, ax=ax, plotFontSize=self.plotFontSize,
                         labelFontSize=self.labelFontSize, midDate=midDate,
                         colorBarLabel='Speed (m/yr)', vmax=vmax, vmin=vmin,
-                        **kwargs)
+                        scale=scale, **kwargs)

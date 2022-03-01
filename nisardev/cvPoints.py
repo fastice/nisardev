@@ -641,13 +641,13 @@ class cvPoints:
             Axis for the plot.
         '''
         @functools.wraps(func)
-        def plotp(*args,  ax=None, xColor='r', yColor='b', date=None,
+        def plotp(inst, *args,  ax=None, xColor='r', yColor='b', date=None,
                   legendKwargs={}, **kwargs):
             if 'units' in kwargs:
                 print('units is not an option for this function')
                 return
-            x, y, iPts = func(*args)
-            dx, dy = dask.compute(args[0].cvDifferences(x, y, iPts, args[1],
+            x, y, iPts = func(inst, *args)
+            dx, dy = dask.compute(inst.cvDifferences(x, y, iPts, args[0],
                                                         date=date))[0]
             # defaults
             for keyw, value in zip(['marker', 'linestyle'], ['.', 'None']):
@@ -655,24 +655,24 @@ class cvPoints:
                     kwargs[keyw] = value
             #
             if 'fontsize' not in legendKwargs:
-                legendKwargs['fontsize'] = args[0].legendFontSize
+                legendKwargs['fontsize'] = inst.legendFontSize
             #
             if ax is None:
                 ax = plt.subplot(111)
             #
             ax.plot(dx, color=xColor, label='$v_x-u_x$',  **kwargs)
             ax.plot(dy, color=yColor, label='$v_y-u_y$',  **kwargs)
-            ax.set_xlabel('Point', size=args[0].labelFontSize)
+            ax.set_xlabel('Point', size=inst.labelFontSize)
             ax.set_ylabel('$u_x-v_x, u_y-v_y$ (m/yr)',
-                          size=args[0].labelFontSize)
+                          size=inst.labelFontSize)
             ax.legend(**legendKwargs)
-            ax.tick_params(axis='x', labelsize=args[0].plotFontSize)
-            ax.tick_params(axis='y', labelsize=args[0].plotFontSize)
+            ax.tick_params(axis='x', labelsize=inst.plotFontSize)
+            ax.tick_params(axis='y', labelsize=inst.plotFontSize)
             return ax
         return plotp
 
     @_plotDiffs
-    def plotVRangeCVDiffs(self, vel, minv, maxv, date=None, **kwargs):
+    def plotVRangeCVDiffs(self, vel, minv, maxv, **kwargs):
         '''
         Plot differences between c/v points and interpolated values from
         v in range (minv,maxv).
@@ -721,13 +721,14 @@ class cvPoints:
             return dx
 
         @functools.wraps(func)
-        def ploth(*args, axes=None, xColor='r', yColor='b', date=None,
+        def ploth(inst, *args, axes=None, xColor='r', yColor='b', date=None,
                   **kwargs):
             if 'units' in kwargs:
                 print('units is not an option for this function')
                 return
-            x, y, iPts = func(*args)
-            dx, dy = dask.compute(args[0].cvDifferences(x, y, iPts, args[1],
+            x, y, iPts = func(inst, *args)
+            print(args)
+            dx, dy = dask.compute(inst.cvDifferences(x, y, iPts, args[0],
                                                         date=date))[0]
             # iGood = np.isfinite(dx)
             dx, dy = clipTail(dx), clipTail(dy)  # Set vals > 3sig to 3sig
@@ -742,11 +743,11 @@ class cvPoints:
             for var, lab, axH in zip([dx, dy], ['x', 'y'], axes):
                 axH.hist(var, facecolor=colors[lab], **kwargs)
                 axH.set_xlabel(f'$u_{lab}-v_{lab}$ (m/yr)',
-                               size=args[0].labelFontSize)
+                               size=inst.labelFontSize)
                 axH.set_ylabel('Relative Frequency',
                                size=args[0].labelFontSize)
-                axH.tick_params(axis='x', labelsize=args[0].plotFontSize)
-                axH.tick_params(axis='y', labelsize=args[0].plotFontSize)
+                axH.tick_params(axis='x', labelsize=inst.plotFontSize)
+                axH.tick_params(axis='y', labelsize=inst.plotFontSize)
             return axes
         return ploth
 

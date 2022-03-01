@@ -16,9 +16,12 @@ import rioxarray
 import stackstac
 import os
 import matplotlib.pylab as plt
+from matplotlib import cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib import colors
 from datetime import datetime
 from dask.diagnostics import ProgressBar
+import math
 
 CHUNKSIZE = 512
 
@@ -75,9 +78,9 @@ class nisarBase2D():
         ''' Abstract reproduce to create a new version of this class.'''
         pass
 
-#
-# ---- Input and array creation
-#
+    #
+    # ---- Input and array creation
+    #
 
     def readXR(self, fileNameBase, url=False, masked=False, stackVar=None,
                time=None, time1=None, time2=None, xrName='None', skip=[]):
@@ -158,7 +161,7 @@ class nisarBase2D():
         '''
         if '.nc' not in cdfFile:
             cdfFile = f'{cdfFile}.nc'
-        xDS = xr.open_dataset(cdfFile, chunks='auto')
+        xDS = xr.open_dataset(cdfFile)
         xDS['time1'] = xDS.time1.compute()
         xDS['time2'] = xDS.time2.compute()
         # Pull the first variable that is not spatial_ref
@@ -199,6 +202,7 @@ class nisarBase2D():
         or the subsetted version '''
         with ProgressBar():
             self.subset.load()
+            self._mapVariables()
 
     def _construct_stac_items(self, fileNameBase, stackVar, url=True, skip=[]):
         ''' construct STAC-style dictionaries of CMR urls for stackstac
@@ -303,6 +307,7 @@ class nisarBase2D():
 
     def _mapVariables(self):
         ''' Map the xr variables to band variables (e.g., 'vx' -> self.vx) '''
+        # Map variables
         for myVar in self.subset.band.data:
             myVar = str(myVar)
             bandData = np.squeeze(self.subset.sel(band=myVar).data)
@@ -427,20 +432,22 @@ class nisarBase2D():
             myError('Unexpected epsg code: '+str(epsg))
         return domain
 
-    # -----------------------------------------------------------------------
-    # Interpolate results
-    # -----------------------------------------------------------------------
+    #
+    # ---- Interpolate results
+    #
 
     def _checkUnits(self, units):
         '''
         Check units return True for valid units. Print message for invalid.
         '''
         if units not in ['m', 'km']:
-            print('Invalid units: must be m or km')
+            print(f'Invalid units: must be m or km not {units}, defaulting '
+                  'to m')
             return False
         return True
 
-    def interpGeo(self, x, y, myVars, date=None, returnXR=False, units='m', **kwargs):
+    def interpGeo(self, x, y, myVars, date=None, returnXR=False, units='m',
+                  **kwargs):
         '''
         Call appropriate interpolation method for each variable specified by
         myVars
@@ -465,36 +472,62 @@ class nisarBase2D():
                               units=units, **kwargs)
 
     def _convertCoordinates(func):
-        ''' This will wrap interpolators so that the input coordinates (e.g.
-        lat lon) will automatically be mapped to xy as specificed by
-        sourceEPSG=epsg.'''
+        '''
+        Wrap interpolators orother functions so that the input coordinates
+        (e.g. lat lon) will automatically be mapped to xy as specificed by
+        Parameters
+        ----------
+        func : function
+            function to be decorated
+        Returns
+        -------
+        function result
+        '''
         @functools.wraps(func)
-        def convertCoordsInner(inst, xin, yin, *args, date=None, units='m',
-                               **kwargs):
+        def convertCoordsInner(inst, xin, yin, *args, units='m',
+                               sourceEPSG=None, **kwargs):
+            '''
+            Coordinate conversion
+            Parameters
+            ----------
+            inst : self
+                Passed in self.
+            xin, yin : scalar or nparray
+                Input coordinates as x, y or lat, lon coords.
+            *args : optional args of wrapped function
+            units : str, optional
+                Input units. The default is 'm'.
+            sourceEPSG : str or int, optional
+                EPSG code for x, y. The default is None (no xform).
+            **kwargs : dict
+                Keywords to pass through to function.
+            Returns
+            -------
+            TBD
+                Results from wrapped function
+            '''
             # No source EPSG so just pass original coords back
-            if 'sourceEPSG' not in kwargs:
+            if sourceEPSG is None:
                 xout, yout = xin, yin
             else:
-                # Ensure epsg a string
-                sourceEPSG = str(kwargs['sourceEPSG'])
-                # See if xform already cached
-                if sourceEPSG not in inst.xforms:
-                    inst.xforms[sourceEPSG] = \
+                if sourceEPSG not in inst.xforms:  # Calc. xform if not cached
+                    inst.xforms[str(sourceEPSG)] = \
                         pyproj.Transformer.from_crs(f"EPSG:{sourceEPSG}",
                                                     f"EPSG:{inst.epsg}")
                 # Transform coordates
-                xout, yout = inst.xforms[sourceEPSG].transform(xin, yin)
-            # Unit conversion if needed
+                xout, yout = inst.xforms[str(sourceEPSG)].transform(xin, yin)
+            # If km, convert to m for internal calcs
             if units == 'km':
-                xout, yout = xout * 1000, yout * 1000
-            return func(inst, xout, yout, *args, date=date, **kwargs)
+                xout, yout = xout * 1000, yout * 1000.
+            return func(inst, xout, yout, *args, **kwargs)
         return convertCoordsInner
 
     @_convertCoordinates
-    def _interpNP(self, x, y, myVars, date=None, units='m', returnXR=False, **kwargs):
+    def _interpNP(self, x, y, myVars, date=None, returnXR=False):
         '''
         Interpolate myVar(y,x) specified myVars (e.g., ['vx'..]) where myVars
-        are nparrays.
+        are nparrays. Linear interpolation in space and nearest neighbor in
+        time.
         Parameters
         ----------
         x: np float array
@@ -503,11 +536,16 @@ class nisarBase2D():
             y coordinates in m to interpolate to.
         myVars : list of str
             list of variable names as strings, e.g. ['vx',...].
-        **kwargs : TBD
-            Keyword pass through to interpolator.
+        date: str (YYYY-mm-dd), or datetime optional
+            Interpolate for data nearest date, None returns all times
+        units : str, optional
+                Input units. The default is 'm'.
+        sourceEPSG : str or int, optional
+                EPSG code for x, y. The default is None (no xform).
         Returns
         -------
-        myResults : float np array
+        result : float np array with shape (band, time, pt) for data is None
+            or with shape (band, pt) for specific date
             Interpolated valutes from x,y locations.
         '''
         if np.isscalar(x):
@@ -527,11 +565,11 @@ class nisarBase2D():
         else:
             return np.squeeze(
                 [result.sel(band=[band]).data for band in myVars])
-       
+
         #
         #nTime = myXR.shape[0]
         #nBands = len(myVars)
-        
+
         # No date or single time layer, so no time dimension
         # if nTime <= 1 or date is not None:
         #     myResults = np.zeros((nBands, *xx1.shape))
@@ -548,9 +586,9 @@ class nisarBase2D():
         #             x=xx1, y=yy1).data
         # return myResults
 
-#
-# ---- Operations on data (e.g., mean, std)
-#
+    #
+    # ---- Operations on data (e.g., mean, std)
+    #
 
     def meanXY(self, returnXR=False):
         '''
@@ -568,7 +606,7 @@ class nisarBase2D():
         if returnXR:
             return result
         return result.data.transpose()
-   
+
     def stdevXY(self, returnXR=False):
         '''
         Return sigma for each spatial layer at each time
@@ -680,9 +718,9 @@ class nisarBase2D():
         '''
         return self.subset.notnull().sum(dim='time')
 
-#
-# ---- time/date related routines
-#
+    #
+    # ---- time/date related routines
+    #
 
     def parseDate(self, date, defaultDate=True):
         ''' Accept date as either datetime or YYYY-MM-DD
@@ -755,9 +793,72 @@ class nisarBase2D():
     # ---- Plotting and display
     #
 
+    def colorSetup(self, scale, cmap, vmin, vmax):
+        '''
+        Set up normalization and color table for imshow
+        Parameters
+        ----------
+        scale : str
+            scale
+        cmap : color map
+            color map.
+        Returns
+        -------
+        norm, normalization
+        cmap, color ma
+        '''
+        if scale == 'log':
+            norm = colors.LogNorm(vmin=vmin, vmax=vmax)
+            # Default color map for log is truncated hsv
+            if cmap is None:
+                cmap = colors.LinearSegmentedColormap.from_list(
+                    'myMap', cm.hsv(np.linspace(0.1, 1, 250)))
+            return norm, cmap
+        # Pass back colormap for linear case
+        elif scale == 'linear':
+            return colors.Normalize(vmin=vmin, vmax=vmax), cmap
+        print('Invalid scale mode. Choices are "linear" and "log"')
+
+    def autoScaleRange(self, band, date, vmin, vmax, percentile):
+        '''
+        If percentile less than 100, will select vmin as (100-percentile)
+        and vmax as percentile of myVar, unless they fall out of the vmin and
+        vmax bounds.
+        Parameters
+        ----------
+        myVar : nparray
+            Data being displayed.
+        vmin : float
+            Absolute minimum value.
+        vmax : TYPE
+            absolute maximum value.
+        percentile : TYPE
+            Clip data at (100-percentile) and percentile.
+
+        Returns
+        -------
+        vmin, vmap - updated values based on percentiles.
+        '''
+        # compute max
+        date = self.parseDate(date)
+        if date is not None:
+            myVar = self.subset.sel(time=date,
+                                    method='nearest').sel(band=band).data
+        else:
+            myVar = self.subset.sel(band=band).data
+        #
+        maxVel = min(np.percentile(myVar[np.isfinite(myVar)], percentile),
+                     vmax)
+        #
+        vmax = math.ceil(maxVel/100.)*100.
+        minVel = max(np.percentile(myVar[np.isfinite(myVar)],
+                                   100 - percentile), vmin)
+        vmin = math.floor(minVel/100.) * 100.
+        return vmin, vmax
+
     def displayVar(self, var, date=None, ax=None, plotFontSize=14,
                    labelFontSize=12, titleFontSize=15, axisOff=False,
-                   vmin=0, vmax=7000, units='m',
+                   vmin=0, vmax=7000, units='m', scale='linear', cmap=None,
                    title=None, midDate=True, colorBarLabel='Speed (m/yr)',
                    **kwargs):
         '''
@@ -783,6 +884,7 @@ class nisarBase2D():
             sx, sy = self.sizeInPixels()
             fig, ax = plt.subplots(1, 1, constrained_layout=True,
                                    figsize=(10.*float(sx)/float(sy), 10.))
+        norm, cmap = self.colorSetup(scale, cmap, vmin, vmax)
         #
         divider = make_axes_locatable(ax)  # Create space for colorbar
         cbAx = divider.append_axes('right', size='5%', pad=0.05)
@@ -790,11 +892,10 @@ class nisarBase2D():
         if var not in self.variables:
             print(f'{var} is not a valid, the choices are {self.variables}')
             return
-        # Plot map
+        # Extract data for band
         displayVar = self.subset.sel(band=var)
-        #
+        # Extract date for time
         date = self.parseDate(date)
-        #
         displayVar = displayVar.sel(time=date, method='nearest')
         # Create title from dates
         if title is None:
@@ -804,7 +905,7 @@ class nisarBase2D():
             else:
                 title = f'{date1} - {date2}'
         displayVar = np.squeeze(displayVar)
-        pos = ax.imshow(displayVar, vmin=vmin, vmax=vmax,
+        pos = ax.imshow(displayVar, norm=norm, cmap=cmap,
                         extent=self.extent(units=units), **kwargs)
         # labels and such
         if axisOff:
