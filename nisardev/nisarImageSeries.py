@@ -8,26 +8,20 @@ Created on Mon Feb 10 11:08:15 2020
 
 # geoimage.py
 import numpy as np
-from nisardev import nisarBase2D, nisarVel
-import os
-from datetime import datetime
+from nisardev import nisarBase2D, nisarImage
 # import matplotlib.pylab as plt
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
-import math
 from osgeo import gdal
 import xarray as xr
-from dask.diagnostics import ProgressBar
+# from dask.diagnostics import ProgressBar
+
+imageTypes = ['image', 'sigma0', 'gamma0']
 
 
-class nisarVelSeries(nisarBase2D):
-    ''' This class creates objects to contain nisar velocity and/or error maps.
+class nisarImageSeries(nisarBase2D):
+    ''' This class creates objects to contain nisar/gimp maps.
     The data can be pass in on init, or read from a geotiff.
 
-    The variables that are used are specified with useVelocity, useErrrors,
-    and, readSpeed and (see nisarVel.readDatafromTiff).
-
-    The variables used are returned as a list (e.g., ["vx","vy"])) by
-    nisarVel.myVariables(useVelocity=True, useErrors=False, readSpeed=False).
     '''
 
     labelFontSize = 14  # Font size for plot labels
@@ -35,10 +29,9 @@ class nisarVelSeries(nisarBase2D):
     legendFontSize = 12  # Font size for legends
     titleFontSize = 15  # Font size for legends
 
-    def __init__(self, verbose=True):
+    def __init__(self, verbose=True,  imageType=None, numWorkers=2):
         '''
-        Instantiate nisarVel object. Possible bands are 'vx', 'vy','v', 'ex',
-        'ey', 'e'
+        Instantiate nisarImageSeries object.
         Parameters
         ----------
         verbose : bool, optional
@@ -47,39 +40,39 @@ class nisarVelSeries(nisarBase2D):
         -------
         None.
         '''
-        nisarBase2D.__init__(self)
-        self.vx, self.vy, self.vv, self.ex, self.ey = [None] * 5
-        self.variables = None
+        nisarBase2D.__init__(self, numWorkers=numWorkers)
+        self.image, self.sigma0, self.gamma0 = [None] * 3
+        #
+        self.myVariables(imageType)
+        self.imageType = imageType
         self.verbose = verbose
-        self.noDataDict = {'vx': -2.0e9, 'vy': -2.0e9, 'vv': -1.0,
-                           'ex': -1.0, 'ey': -1.0}
-        self.gdalType = gdal.GDT_Float32  # data type for velocity products
-        self.dtype = 'float32'
+        self.noDataDict = dict(zip(imageTypes, [0, -30., -30.]))
         self.nLayers = 0  # Number of time layers
 
-    def myVariables(self, useVelocity, useErrors, readSpeed=False):
+    def myVariables(self, imageType):
         '''
-        Based on the input flags, this routine determines which velocity/error
-        fields that an instance will contain.
+        Set myVariables based on imageType (image, sigma0, gamma0).
+        Unlike velocity, images are single band.
         Parameters
         ----------
-        useVelocity : bool
-            Include 'vx', 'vy', and 'vv'.
-        useErrors : bool
-            Include 'ex', and 'ey'.
-        readSpeed : bool, optional
-            If false, don't include vv. The default is False.
+        imageType str:
+            imageType either 'image', 'sigma0', or 'gamma0'
         Returns
         -------
         myVars : list of str
-            list of variable names as strings, e.g. ['vx',...].
+            list with variable name, e.g. ['gamma0'].
         '''
-        myVars = []
-        if useVelocity:
-            myVars += ['vx', 'vy', 'vv']
-        if useErrors:
-            myVars += ['ex', 'ey']
+        if imageType is None:
+            return
+        if imageType not in imageTypes:
+            print(f'Invalid Image Type: {imageType} must be {imageTypes}')
+        myVars = [imageType]
         self.variables = myVars
+        self.dtype = dict(zip(imageTypes,
+                              ['uint8', 'float32', 'float32']))[imageType]
+        self.gdalType = dict(zip(imageTypes,
+                             [gdal.GDT_Byte, gdal.GDT_Float32,
+                              gdal.GDT_Float32]))[imageType]
         return myVars
 
     # ------------------------------------------------------------------------
@@ -131,16 +124,11 @@ class nisarVelSeries(nisarBase2D):
     # I/O Routines
     # ------------------------------------------------------------------------
 
-    def readSeriesFromTiff(self, fileNames, useVelocity=True, useErrors=False,
-                           readSpeed=False, url=False, stackVar=None,
-                           index1=4, index2=5, dateFormat='%d%b%y'):
+    def readSeriesFromTiff(self, fileNames, url=False, stackVar=None,
+                           index1=3, index2=4, dateFormat='%d%b%y',
+                           overviewLevel=None):
         '''
         read in a tiff product fileNameBase.*.tif. If
-        useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
-        useErrors=True read errors (e.g, fileNameBase.ex(ey).tif)
-        useSpeed=True read speed (e.g, fileNameBase.vv.tif) otherwise
-        compute from vx,vy.
-
         Files can be read as np arrays of xarrays (useXR=True, not well tested)
 
         Parameters
@@ -150,45 +138,42 @@ class nisarVelSeries(nisarBase2D):
             pattern.*.abc or pattern*.
             The wildcard (*) will be filled with the values in myVars
             e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
-        useVelocity : bool, optional
-            Interpolate velocity if True. The default is True.
-        useErrors : bool, optional
-            Interpolate errors if True. The default is False.
-        readSpeed : bool, optional
-            Read speed (.vv) if True. The default is False.
         url : bool, optional
             Read data from url
         stacVar : diction, optional
             for stackstac {'bounds': [], 'resolution': res, 'epsg': epsg}
         index1, index2 : location of dates in filename with seperated by _
         dateFormat : format code to strptime
+        overviewLevel: int
+            Overview (pyramid) level to read: None->full res, 0->1/2 res,
+            1->1/4 res....to image dependent max downsampling level
         Returns
         -------
         None.
         '''
-        self.variables = self.myVariables(useVelocity, useErrors, readSpeed)
-        self.velMaps = []
-        with ProgressBar():
-            for fileName in fileNames:
-                myVel = nisarVel()
-                myVel.readDataFromTiff(fileName, useVelocity=useVelocity,
-                                       useErrors=useErrors,
-                                       readSpeed=readSpeed,
-                                       url=url, stackVar=stackVar,
-                                       index1=index1, index2=index2,
-                                       dateFormat=dateFormat)
-                self.velMaps.append(myVel)
-        bBox = myVel.boundingBox(units='m')
+        self.imageMaps = []
+        for fileName in fileNames:
+            fileName = fileName.replace('.tif', '')
+            myImage = nisarImage()
+            myImage.readDataFromTiff(fileName,
+                                     url=url, stackVar=stackVar,
+                                     index1=index1, index2=index2,
+                                     dateFormat=dateFormat,
+                                     overviewLevel=overviewLevel)
+            self.imageMaps.append(myImage)
+        bBox = myImage.boundingBox(units='m')
+        self.imageType = myImage.imageType
         # Combine individual bands
         self.nLayers = len(fileNames)
-        self.xr = xr.concat([x.xr for x in self.velMaps], dim='time',
+        self.xr = xr.concat([x.xr for x in self.imageMaps], dim='time',
                             join='override', combine_attrs='drop')
         # ensure that properly sorted in time
         self.xr = self.xr.sortby(self.xr.time)
         # This forces a subset=entire image, which will trigger initialization
-        # Spatial parameters derived from the first velMap
-        self.subSetVel(bBox)
-        self.xr = self.xr.rename('VelocitySeries')
+        # Spatial parameters derived from the first imageMap
+        self.variables = self.myVariables(self.imageType)
+        self.subSetImage(bBox)
+        self.xr = self.xr.rename('ImageSeries')
         self.time = [self.datetime64ToDatetime(x)
                      for x in self.xr.time.data]
         self.time1 = [self.datetime64ToDatetime(x)
@@ -196,27 +181,9 @@ class nisarVelSeries(nisarBase2D):
         self.time2 = [self.datetime64ToDatetime(x)
                       for x in self.xr.time2.data]
 
-    def _addSpeedSeries(self):
-        ''' Add speed if only have vx and vy '''
-        dv = xr.DataArray(np.sqrt(np.square(self.vx) + np.square(self.vy)),
-                          coords=[self.xr.time, self.xr.y, self.xr.x],
-                          dims=['time', 'y', 'x'])
-        # add band for vv
-        dv = dv.expand_dims(dim=['band'])
-        dv['band'] = ['vv']
-        dv['time'] = self.xr['time']
-        dv['name'] = self.xr['name']
-        # Add to vx, vy xr
-        self.xr = xr.concat([self.xr, dv], dim='band', join='override',
-                            combine_attrs='drop')
-        #
-        if 'vv' not in self.variables:
-            self.variables.append('vv')
-        self._mapVariables()
-
     def readSeriesFromNetCDF(self, cdfFile):
         '''
-        Read a cdf file previously saved by a velSeries instance.
+        Read a cdf file previously saved by a imageSeries instance.
         Parameters
         ----------
         cdfFile : str
@@ -231,25 +198,18 @@ class nisarVelSeries(nisarBase2D):
         # Initialize various variables.
         self.nLayers = len(self.xr.time.data)
         self.variables = list(self.xr.band.data)
-        if 'vv' not in self.variables and 'vx' in self.variables and \
-                'vy' in self.variables:
-
-            self._addSpeedSeries()
-            self.subset = self.xr
-
+        self.subset = self.xr
         # get times
         self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
         self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
         self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
 
-    def subSetVel(self, bbox, useVelocity=True):
+    def subSetImage(self, bbox):
         ''' Subset dataArray to a bounding box
         Parameters
         ----------
         bbox : dict
             {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
-        useVelocity: bool, optional
-            compute speed from vx, vy
         Returns
         -------
         None.
@@ -260,15 +220,17 @@ class nisarVelSeries(nisarBase2D):
     # Ploting routines.
     # ------------------------------------------------------------------------
 
-    def displayVelForDate(self, date=None, ax=None, band='vv',
-                          plotFontSize=plotFontSize,
-                          titleFontSize=titleFontSize,
-                          labelFontSize=labelFontSize,
-                          autoScale=True, axisOff=False,  colorBar=True,
-                          vmin=0, vmax=7000, percentile=100,
-                          colorBarLabel='Speed (m/yr)', **kwargs):
+    def displayImageForDate(self, date=None, ax=None,
+                            plotFontSize=plotFontSize,
+                            titleFontSize=titleFontSize,
+                            labelFontSize=labelFontSize,
+                            autoScale=True, axisOff=False,  colorBar=True,
+                            vmin=None, vmax=None, percentile=100, cmap='gray',
+                            colorBarPosition='right', colorBarSize='5%',
+                            colorBarPad=0.05,
+                            colorBarLabel=None, **kwargs):
         '''
-         Use matplotlib to show a velocity layer selected by date.
+         Use matplotlib to show a image layer selected by date.
          Clip to absolute max set by maxv, though in practives percentile
          will clip at a signficantly lower value.
 
@@ -291,9 +253,9 @@ class nisarVelSeries(nisarBase2D):
         axisOff : TYPE, optional
             Turn axes off. The default is False.
         vmax : number, optional
-            max velocity to display. The default is 7000.
+            max value to display. The default is 7000.
         vmin : number, optional
-            min velocity to display. The default is 0.
+            min value to display. The default is 0.
         percentile : number, optional
             percentile to clip display at. The default is 100
         **kwargs : dict
@@ -303,20 +265,29 @@ class nisarVelSeries(nisarBase2D):
         None.
 
         '''
-        # Compute auto scale params
-        if autoScale:
-            vmin, vmax = self.autoScaleRange(band, date, vmin, vmax,
-                                             percentile)
-
+        band = self.variables[0]
+        band = self.variables[0]
+        if vmax is None:
+            vmax = {'image': 255, 'sigma0': 10, 'gamma0': 10}[band]
+        if vmin is None:
+            vmin = {'image': 0, 'sigma0': -30, 'gamma0': -30}[band]
+        # clip to percentile value
+        vmin, vmax = self.autoScaleRange(band, None, vmin, vmax, percentile,
+                                         quantize=1.)
+        if colorBarLabel is None:
+            colorBarLabel = {'image': 'DN', 'gamma0': '$\\gamma_o$ (dB)',
+                             'sigma0': '$\\sigma_o$ (dB)'}[band]
         # Create plot
         self.displayVar(band, date=date, ax=ax, plotFontSize=plotFontSize,
                         labelFontSize=labelFontSize,
                         titleFontSize=titleFontSize,
                         axisOff=axisOff, colorBar=colorBar,
+                        colorBarPosition=colorBarPosition,
+                        colorBarSize=colorBarSize, colorBarPad=colorBarPad,
                         colorBarLabel=colorBarLabel, vmax=vmax, vmin=vmin,
-                        **kwargs)
+                        cmap=cmap, **kwargs)
 
     @classmethod
     def reproduce(cls):
-        ''' Create and return a new instance of velocitySeries '''
+        ''' Create and return a new instance of imageSeries '''
         return cls()

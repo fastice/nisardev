@@ -20,7 +20,7 @@ from matplotlib import cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib import colors
 from datetime import datetime
-from dask.diagnostics import ProgressBar
+# from dask.diagnostics import ProgressBar
 import math
 
 CHUNKSIZE = 512
@@ -50,6 +50,7 @@ class nisarBase2D():
         self.subset = None
         self.variables = None
         self.flipY = True
+        self.dtype = 'float32'
         self.useStackstac = False
         self.xforms = {}  # Cached pyproj transforms
         dask.config.set(num_workers=numWorkers)
@@ -83,7 +84,8 @@ class nisarBase2D():
     #
 
     def readXR(self, fileNameBase, url=False, masked=False, stackVar=None,
-               time=None, time1=None, time2=None, xrName='None', skip=[]):
+               time=None, time1=None, time2=None, xrName='None', skip=[],
+               overviewLevel=None):
         ''' Use read data into rioxarray variable
         Parameters
         ----------
@@ -100,16 +102,21 @@ class nisarBase2D():
             Nominal endtie. The default is None.
         xrName : str, optional
             Name for xarray. The default is None
+        overviewLevel: int
+            Overview (pyramid) level to read: None->full res, 0->1/2 res,
+            1->1/4 res....to image dependent max downsampling level
         '''
         # Do a lazy open on the tiffs
         if stackVar is None:
             myXR = self._lazy_openTiff(fileNameBase, url=url, masked=masked,
-                                       time=time, xrName=xrName, skip=skip)
+                                       time=time, xrName=xrName, skip=skip,
+                                       overviewLevel=overviewLevel)
         else:  # Not debugged
             items = self._construct_stac_items(fileNameBase, stackVar,
                                                xrName=xrName, url=url,
                                                skip=skip)
-            myXR = self._lazy_open_stack(items, stackVar)
+            myXR = self._lazy_open_stack(items, stackVar,
+                                         overviewLevel=overviewLevel)
         # Initialize array
         self.initXR(myXR, time=time, time1=time1, time2=time2)
 
@@ -139,9 +146,9 @@ class nisarBase2D():
         # get the geoinfo
         self._parseGeoInfo()
         #
-        if time1 is not None:
+        if time1 is not None and 'time1' not in list(self.xr.coords):
             self.xr['time1'] = time1
-        if time2 is not None:
+        if time2 is not None and 'time2' not in list(self.xr.coords):
             self.xr['time2'] = time2
         #
         self.xr.rename(xrName)
@@ -200,9 +207,8 @@ class nisarBase2D():
     def loadRemote(self):
         ''' Load the current XR, either full array if not subset,
         or the subsetted version '''
-        with ProgressBar():
-            self.subset.load()
-            self._mapVariables()
+        self.subset.load()
+        self._mapVariables()
 
     def _construct_stac_items(self, fileNameBase, stackVar, url=True, skip=[]):
         ''' construct STAC-style dictionaries of CMR urls for stackstac
@@ -231,7 +237,6 @@ class nisarBase2D():
 
     def _lazy_open_stack(self, items, stackVar):
         ''' return stackstac xarray dataarray - not debugged '''
-        dtype = 'float32'
         print('this method should not be used until problems with '
               'stackstac resolved')
         return
@@ -244,7 +249,7 @@ class nisarBase2D():
                              epsg=stackVar['epsg'],
                              resolution=stackVar['resolution'],
                              fill_value=fill_value,
-                             dtype=dtype,
+                             dtype=self.dtype,
                              xy_coords='center',
                              chunksize=CHUNKSIZE,
                              bounds=stackVar['bounds']
@@ -254,7 +259,7 @@ class nisarBase2D():
 
     # @dask.delayed
     def _lazy_openTiff(self, fileNameBase, masked=True, url=False, time=None,
-                       xrName='None', skip=[]):
+                       xrName='None', skip=[], overviewLevel=None):
         '''
         Lazy open of a single velocity product
         Parameters
@@ -293,7 +298,9 @@ class nisarBase2D():
             # read file via rioxarry
             da = rioxarray.open_rasterio(bandTiff, lock=True,
                                          default_name=fileNameBase,
-                                         chunks=chunks, masked=masked)
+                                         chunks=chunks, masked=masked,
+                                         overview_level=overviewLevel)
+            # Process time dim
             if time is not None:
                 da = da.expand_dims(dim='time')
                 da['time'] = [time]
@@ -566,26 +573,6 @@ class nisarBase2D():
             return np.squeeze(
                 [result.sel(band=[band]).data for band in myVars])
 
-        #
-        #nTime = myXR.shape[0]
-        #nBands = len(myVars)
-
-        # No date or single time layer, so no time dimension
-        # if nTime <= 1 or date is not None:
-        #     myResults = np.zeros((nBands, *xx1.shape))
-        # else:  # Include time dimension
-        #     myResults = np.zeros((nBands, nTime, *xx1.shape))
-        # # Interp by band
-        # for myVar, i in zip(myVars, range(0, len(myVars))):
-        #     if date is None:
-        #         myResults[i][:] = myXR.sel(
-        #             band=myVar).interp(x=xx1, y=yy1).data
-        #     else:
-        #         myResults[i][:] = myXR.sel(
-        #             band=myVar).sel(time=date, method='nearest').interp(
-        #             x=xx1, y=yy1).data
-        # return myResults
-
     #
     # ---- Operations on data (e.g., mean, std)
     #
@@ -639,12 +626,17 @@ class nisarBase2D():
             # myXR['time2'] = inst.subset.time2.data[-1]
             # Init mean instance
             result = inst.reproduce()
-            result.time1 = inst.subset.time1[0]
-            result.time2 = inst.subset.time2[0]
-            result.time = [inst.datetime64ToDatetime(x) for x in
-                           myXR.time.data]
             result.initXR(myXR, time1=inst.subset.time1.data[0],
                           time2=inst.subset.time2.data[-1])
+            if len(myXR.time) > 1:
+                result.time1 = [x for x in inst.time1]
+                result.time2 = [x for x in inst.time2]
+            else:
+                result.time1 = inst.time1[0]
+                result.time2 = inst.time2[-1]
+            result.time = [inst.datetime64ToDatetime(x) for x in
+                           myXR.time.data]
+     
             return result
         return _applyInTimeInner
 
@@ -657,6 +649,8 @@ class nisarBase2D():
             dim='time', join='override', combine_attrs='drop')
         # fix coordinate order
         myAnomalyXR = myAnomalyXR.transpose('time', 'band', 'y', 'x')
+        myAnomalyXR['time1'] = self.xr.time1.copy()
+        myAnomalyXR['time2'] = self.xr.time2.copy()
         return myAnomalyXR
 
     @_applyInTime
@@ -819,7 +813,7 @@ class nisarBase2D():
             return colors.Normalize(vmin=vmin, vmax=vmax), cmap
         print('Invalid scale mode. Choices are "linear" and "log"')
 
-    def autoScaleRange(self, band, date, vmin, vmax, percentile):
+    def autoScaleRange(self, band, date, vmin, vmax, percentile, quantize=100.):
         '''
         If percentile less than 100, will select vmin as (100-percentile)
         and vmax as percentile of myVar, unless they fall out of the vmin and
@@ -850,16 +844,45 @@ class nisarBase2D():
         maxVel = min(np.percentile(myVar[np.isfinite(myVar)], percentile),
                      vmax)
         #
-        vmax = math.ceil(maxVel/100.)*100.
+        vmax = math.ceil(maxVel/quantize)*quantize
         minVel = max(np.percentile(myVar[np.isfinite(myVar)],
                                    100 - percentile), vmin)
-        vmin = math.floor(minVel/100.) * 100.
+        vmin = math.floor(minVel/quantize) * quantize
         return vmin, vmax
 
+    def _createDivider(self, ax, colorBarPosition='right', colorBarSize='5%',
+                       colorBarPad=0.05):
+        '''
+        Create divider for color bar
+        '''
+        divider = make_axes_locatable(ax)  # Create space for colorbar
+        return divider.append_axes(colorBarPosition, size=colorBarSize,
+                                   pad=colorBarPad)
+
+    def _colorBar(self, pos, ax, colorBarLabel, colorBarPosition, colorBarSize,
+                  colorBarPad, labelFontSize, plotFontSize):
+        '''
+        Color bar for image
+        '''
+        # Create an divided axis for cb
+        cbAx = self._createDivider(ax, colorBarPosition=colorBarPosition,
+                                   colorBarSize=colorBarSize,
+                                   colorBarPad=colorBarPad)
+        # Select orientation
+        orientation = {'right': 'vertical', 'left': 'vertical',
+                       'top': 'horizontal',
+                       'bottom': 'horizontal'}[colorBarPosition]
+        cb = plt.colorbar(pos, cax=cbAx, orientation=orientation, extend='max')
+        cb.set_label(colorBarLabel, size=labelFontSize)
+        cb.ax.tick_params(labelsize=plotFontSize)
+
     def displayVar(self, var, date=None, ax=None, plotFontSize=14,
+                   colorBar=True,
                    labelFontSize=12, titleFontSize=15, axisOff=False,
                    vmin=0, vmax=7000, units='m', scale='linear', cmap=None,
                    title=None, midDate=True, colorBarLabel='Speed (m/yr)',
+                   masked=None, colorBarPosition='right', colorBarSize='5%',
+                   colorBarPad=0.05,
                    **kwargs):
         '''
         Use matplotlib to show velocity in a single subplot with a color
@@ -885,9 +908,6 @@ class nisarBase2D():
             fig, ax = plt.subplots(1, 1, constrained_layout=True,
                                    figsize=(10.*float(sx)/float(sy), 10.))
         norm, cmap = self.colorSetup(scale, cmap, vmin, vmax)
-        #
-        divider = make_axes_locatable(ax)  # Create space for colorbar
-        cbAx = divider.append_axes('right', size='5%', pad=0.05)
         # Return if invalid var
         if var not in self.variables:
             print(f'{var} is not a valid, the choices are {self.variables}')
@@ -896,7 +916,20 @@ class nisarBase2D():
         displayVar = self.subset.sel(band=var)
         # Extract date for time
         date = self.parseDate(date)
-        displayVar = displayVar.sel(time=date, method='nearest')
+        displayVar = displayVar.sel(time=date, method='nearest')      
+        # Display the data
+        displayVar = np.squeeze(displayVar)
+        pos = ax.imshow(np.ma.masked_where(displayVar == masked, displayVar,
+                                           copy=True), norm=norm, cmap=cmap,
+                        extent=self.extent(units=units), **kwargs)
+        # labels and such
+        if axisOff:
+            ax.axis('off')
+        else:
+            ax.set_xlabel(f'X ({units})', size=labelFontSize)
+            ax.set_ylabel(f'Y ({units})', size=labelFontSize)
+            ax.tick_params(axis='x', labelsize=plotFontSize)
+            ax.tick_params(axis='y', labelsize=plotFontSize)
         # Create title from dates
         if title is None:
             middleDate, date1, date2 = self._dates(date, asString=True)
@@ -904,21 +937,13 @@ class nisarBase2D():
                 title = middleDate
             else:
                 title = f'{date1} - {date2}'
-        displayVar = np.squeeze(displayVar)
-        pos = ax.imshow(displayVar, norm=norm, cmap=cmap,
-                        extent=self.extent(units=units), **kwargs)
-        # labels and such
-        if axisOff:
-            ax.axis('off')
-        # labels and such.
-        cb = plt.colorbar(pos, cax=cbAx, orientation='vertical', extend='max')
-        cb.set_label(colorBarLabel, size=labelFontSize)
-        cb.ax.tick_params(labelsize=plotFontSize)
-        ax.set_xlabel(f'X ({units})', size=labelFontSize)
-        ax.set_ylabel(f'Y ({units})', size=labelFontSize)
-        ax.tick_params(axis='x', labelsize=plotFontSize)
-        ax.tick_params(axis='y', labelsize=plotFontSize)
         ax.set_title(title, fontsize=titleFontSize)
+        # labels and such.
+        if colorBar:
+            self._colorBar(pos, ax, colorBarLabel, colorBarPosition,
+                           colorBarSize, colorBarPad, labelFontSize,
+                           plotFontSize)
+
         return ax
 
     #

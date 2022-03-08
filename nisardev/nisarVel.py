@@ -53,6 +53,7 @@ class nisarVel(nisarBase2D):
         self.noDataDict = {'vx': -2.0e9, 'vy': -2.0e9, 'vv': -1.0,
                            'ex': -1.0, 'ey': -1.0}
         self.gdalType = gdal.GDT_Float32  # data type for velocity products
+        self.dtype = 'float32'
 
     def myVariables(self, useVelocity, useErrors, readSpeed=False):
         '''
@@ -259,7 +260,7 @@ class nisarVel(nisarBase2D):
     def displayVel(self, ax=None, band='vv',
                    plotFontSize=plotFontSize,
                    titleFontSize=titleFontSize,
-                   labelFontSize=labelFontSize,
+                   labelFontSize=labelFontSize,  colorBar=True,
                    scale='linear', axisOff=False, midDate=True,
                    vmin=0, vmax=7000, percentile=100, **kwargs):
         '''
@@ -307,4 +308,5 @@ class nisarVel(nisarBase2D):
         self.displayVar(band, ax=ax, plotFontSize=self.plotFontSize,
                         labelFontSize=self.labelFontSize, midDate=midDate,
                         colorBarLabel='Speed (m/yr)', vmax=vmax, vmin=vmin,
+                        axisOff=axisOff, colorBar=colorBar,
                         scale=scale, **kwargs)
