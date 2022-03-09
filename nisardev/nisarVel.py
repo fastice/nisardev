@@ -13,7 +13,6 @@ import os
 from datetime import datetime
 # import matplotlib.pylab as plt
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
-import math
 from osgeo import gdal
 import xarray as xr
 
@@ -128,7 +127,8 @@ class nisarVel(nisarBase2D):
 
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
                          readSpeed=False, url=False, stackVar=None,
-                         index1=4, index2=5, dateFormat='%d%b%y'):
+                         index1=4, index2=5, dateFormat='%d%b%y',
+                         overviewLevel=None):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -157,6 +157,9 @@ class nisarVel(nisarBase2D):
             for stackstac {'bounds': [], 'resolution': res, 'epsg': epsg}
         index1, index2 : location of dates in filename with seperated by _
         dateFormat : format code to strptime
+        overviewLevel: int
+            Overview (pyramid) level to read: None->full res, 0->1/2 res,
+            1->1/4 res....to image dependent max downsampling level
         Returns
         -------
         None.
@@ -169,8 +172,7 @@ class nisarVel(nisarBase2D):
             skip = ['vv']  # Force skip
         self.readXR(fileNameBase, url=url, masked=True, stackVar=stackVar,
                     time=self.midDate, skip=skip, time1=self.date1,
-                    time2=self.date2)
-
+                    time2=self.date2, overviewLevel=overviewLevel)
         # compute speed rather than download
         if not readSpeed and useVelocity:
             self._addSpeed()
