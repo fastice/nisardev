@@ -199,10 +199,10 @@ class nisarVel(nisarBase2D):
         self.nLayers = len(self.xr.time.data)
         self.variables = list(self.xr.band.data)
         if 'vv' not in self.variables and 'vx' in self.variables and \
-                'vy' in self.variables:   
+                'vy' in self.variables:
             self._addSpeed()
             self.subset = self.xr
-        # set times   
+        # set times
         self.time = [np.datetime64(self.xr.time.item(), 'ns')]
         self.time1 = [np.datetime64(self.xr.time1.item(), 'ns')]
         self.time2 = [np.datetime64(self.xr.time2.item(), 'ns')]
@@ -300,7 +300,8 @@ class nisarVel(nisarBase2D):
         # Compute display bounds
         if scale == 'linear':
             # clip to percentile value
-            vmin, vmax = self.autoScaleRange(band, None, vmin, vmax, percentile)
+            vmin, vmax = self.autoScaleRange(band, None, vmin, vmax,
+                                             percentile)
         elif scale == 'log':
             vmin = max(.1, vmin)  # Don't allow to small a value
         else:
