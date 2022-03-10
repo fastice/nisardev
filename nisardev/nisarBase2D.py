@@ -636,7 +636,6 @@ class nisarBase2D():
                 result.time2 = inst.time2[-1]
             result.time = [inst.datetime64ToDatetime(x) for x in
                            myXR.time.data]
-     
             return result
         return _applyInTimeInner
 
@@ -813,7 +812,7 @@ class nisarBase2D():
             return colors.Normalize(vmin=vmin, vmax=vmax), cmap
         print('Invalid scale mode. Choices are "linear" and "log"')
 
-    def autoScaleRange(self, band, date, vmin, vmax, percentile, quantize=100.):
+    def autoScaleRange(self, band, date, vmin, vmax, percentile, quantize=100):
         '''
         If percentile less than 100, will select vmin as (100-percentile)
         and vmax as percentile of myVar, unless they fall out of the vmin and
@@ -916,7 +915,7 @@ class nisarBase2D():
         displayVar = self.subset.sel(band=var)
         # Extract date for time
         date = self.parseDate(date)
-        displayVar = displayVar.sel(time=date, method='nearest')      
+        displayVar = displayVar.sel(time=date, method='nearest')
         # Display the data
         displayVar = np.squeeze(displayVar)
         pos = ax.imshow(np.ma.masked_where(displayVar == masked, displayVar,

@@ -266,7 +266,8 @@ class nisarVelSeries(nisarBase2D):
                           plotFontSize=plotFontSize,
                           titleFontSize=titleFontSize,
                           labelFontSize=labelFontSize,
-                          autoScale=True, axisOff=False,  colorBar=True,
+                          autoScale=True, scale='linear', axisOff=False,
+                          colorBar=True,
                           vmin=0, vmax=7000, percentile=100,
                           colorBarLabel='Speed (m/yr)', **kwargs):
         '''
@@ -306,17 +307,23 @@ class nisarVelSeries(nisarBase2D):
 
         '''
         # Compute auto scale params
-        if autoScale:
-            vmin, vmax = self.autoScaleRange(band, date, vmin, vmax,
+        if scale == 'linear':
+            # clip to percentile value
+            vmin, vmax = self.autoScaleRange(band, date, vmin, vmax, 
                                              percentile)
-
+        elif scale == 'log':
+            vmin = max(.1, vmin)  # Don't allow too small a value
+        else:
+            print('Invalid scale option, use linear or log')
+            return
+        print(vmin, vmax)
         # Create plot
         self.displayVar(band, date=date, ax=ax, plotFontSize=plotFontSize,
                         labelFontSize=labelFontSize,
                         titleFontSize=titleFontSize,
                         axisOff=axisOff, colorBar=colorBar,
                         colorBarLabel=colorBarLabel, vmax=vmax, vmin=vmin,
-                        **kwargs)
+                        scale=scale, **kwargs)
 
     @classmethod
     def reproduce(cls):
