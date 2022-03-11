@@ -193,10 +193,16 @@ class nisarVelSeries(nisarBase2D):
         self.xr = self.xr.rename('VelocitySeries')
         self.time = [self.datetime64ToDatetime(x)
                      for x in self.xr.time.data]
-        self.time1 = [self.datetime64ToDatetime(x)
-                      for x in self.xr.time1.data]
-        self.time2 = [self.datetime64ToDatetime(x)
-                      for x in self.xr.time2.data]
+        if len(self.xr.time1.data.shape) == 0:
+            self.time1 = [self.xr.time1.item()]
+        else:
+            self.time1 = [self.datetime64ToDatetime(x)
+                          for x in self.xr.time1.data]
+        if len(self.xr.time2.data.shape) == 0:
+            self.time1 = [self.xr.time2.item()]
+        else:
+            self.time2 = [self.datetime64ToDatetime(x)
+                          for x in self.xr.time2.data]
 
     def _addSpeedSeries(self):
         ''' Add speed if only have vx and vy '''

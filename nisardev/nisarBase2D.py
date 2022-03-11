@@ -980,6 +980,27 @@ class nisarBase2D():
             return self._toKM(self.sx*self.dx, self.sy*self.dy)
         return self.sx*self.dx, self.sy*self.dy
 
+    def outline(self, units='m'):
+        '''
+        Return x, y coordinate of images exent to plot as box.
+
+        Parameters
+        ----------
+        units : str, optional
+            units. The default is 'm'.
+
+        Returns
+        -------
+        x, y coordinates of outline
+        '''
+        self._checkUnits(units)
+        bbox = self._xrBoundingBox(self.subset, units=units)
+        xbox = np.array([bbox[x] for x in ['minx', 'minx', 'maxx',
+                                           'maxx', 'minx']])
+        ybox = np.array([bbox[y] for y in ['miny', 'maxy', 'maxy',
+                                           'miny', 'miny']])
+        return xbox, ybox
+
     def origin(self, units='m'):
         ''' Return origin in meters (default) or km '''
         self._checkUnits(units)
@@ -1028,10 +1049,13 @@ class nisarBase2D():
         bounds = self.bounds(units=units)
         return bounds[0], bounds[2], bounds[1], bounds[3]
 
-    def _xrBoundingBox(self, myXR):
+    def _xrBoundingBox(self, myXR, units='m'):
         ''' bounding box for an xr '''
+        self._checkUnits(units)
         extremes = [np.min(myXR.x.data), np.max(myXR.x.data),
                     np.min(myXR.y.data), np.max(myXR.y.data)]
+        if units == 'km':
+            extremes = [x * 0.001 for x in extremes]
         return dict(zip(['minx', 'maxx', 'miny', 'maxy'], extremes))
 
     def boundingBox(self, units='m'):
