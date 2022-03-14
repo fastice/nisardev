@@ -871,14 +871,16 @@ class nisarBase2D():
         orientation = {'right': 'vertical', 'left': 'vertical',
                        'top': 'horizontal',
                        'bottom': 'horizontal'}[colorBarPosition]
-        hAlignment = {'right': 'right', 'left': 'left', 'top': 'center',
-                      'bottom': 'center'}[colorBarPosition]
-        vAlignment = {'right': 'center', 'left': 'center', 'top': 'top',
-                      'bottom': 'top'}[colorBarPosition]
+
         cb = plt.colorbar(pos, cax=cbAx, orientation=orientation, extend='max')
-        cb.set_label(colorBarLabel, size=labelFontSize,
-                     horizontalalighnment=hAlignment)
+        cb.set_label(colorBarLabel, size=labelFontSize)
         cb.ax.tick_params(labelsize=plotFontSize)
+        if colorBarPosition in ['right', 'left']:
+            cbAx.yaxis.set_ticks_position(colorBarPosition)
+            cbAx.yaxis.set_label_position(colorBarPosition)
+        elif colorBarPosition in ['top', 'tottom']:
+            cbAx.xaxis.set_ticks_position(colorBarPosition)
+            cbAx.xaxis.set_label_position(colorBarPosition)
 
     def displayVar(self, var, date=None, ax=None, plotFontSize=14,
                    colorBar=True,
