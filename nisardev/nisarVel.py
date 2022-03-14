@@ -10,7 +10,7 @@ Created on Mon Feb 10 11:08:15 2020
 import numpy as np
 from nisardev import nisarBase2D
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 # import matplotlib.pylab as plt
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
 from osgeo import gdal
@@ -128,7 +128,7 @@ class nisarVel(nisarBase2D):
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
                          readSpeed=False, url=False, stackVar=None,
                          index1=4, index2=5, dateFormat='%d%b%y',
-                         overviewLevel=None):
+                         overviewLevel=None, masked=True):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -164,7 +164,8 @@ class nisarVel(nisarBase2D):
         -------
         None.
         '''
-        self.parseVelDatesFromFileName(fileNameBase)
+        self.parseVelDatesFromFileName(fileNameBase, index1=index1,
+                                       index2=index2, dateFormat=dateFormat)
         self.variables = self.myVariables(useVelocity, useErrors, readSpeed)
         if readSpeed:
             skip = []
@@ -250,7 +251,12 @@ class nisarVel(nisarBase2D):
         '''
         baseNamePieces = os.path.basename(fileNameBase).split('_')
         self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
-        self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
+        if index2 is not None:
+            self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
+        else:
+           # assume monthly
+           tmp = self.date1 + timedelta(days=32)
+           self.date2 = tmp - timedelta(days=tmp.day)    
         self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
         #
         return self.midDate

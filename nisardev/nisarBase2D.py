@@ -871,8 +871,13 @@ class nisarBase2D():
         orientation = {'right': 'vertical', 'left': 'vertical',
                        'top': 'horizontal',
                        'bottom': 'horizontal'}[colorBarPosition]
+        hAlignment = {'right': 'right', 'left': 'left', 'top': 'center',
+                      'bottom': 'center'}[colorBarPosition]
+        vAlignment = {'right': 'center', 'left': 'center', 'top': 'top',
+                      'bottom': 'top'}[colorBarPosition]
         cb = plt.colorbar(pos, cax=cbAx, orientation=orientation, extend='max')
-        cb.set_label(colorBarLabel, size=labelFontSize)
+        cb.set_label(colorBarLabel, size=labelFontSize,
+                     horizontalalighnment=hAlignment)
         cb.ax.tick_params(labelsize=plotFontSize)
 
     def displayVar(self, var, date=None, ax=None, plotFontSize=14,
@@ -918,6 +923,7 @@ class nisarBase2D():
         displayVar = displayVar.sel(time=date, method='nearest')
         # Display the data
         displayVar = np.squeeze(displayVar)
+        
         pos = ax.imshow(np.ma.masked_where(displayVar == masked, displayVar,
                                            copy=True), norm=norm, cmap=cmap,
                         extent=self.extent(units=units), **kwargs)
