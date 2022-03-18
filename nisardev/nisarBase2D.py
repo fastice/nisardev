@@ -343,6 +343,49 @@ class nisarBase2D():
         self.dx, self.dy = abs(gT[0]), abs(gT[4])
         self._computeCoords(myXr)
 
+    def timeSliceData(self, date1, date2):
+        '''
+        Extract a subSeries from an existing series and return a new series
+        spanning date1 to date2.
+       
+        Parameters
+        ----------
+        date1 : Tdatetime or "YYYY-MM-DD"
+            First date in range.
+        date2 : TYPE
+            Second date in range.
+
+        Returns
+        -------
+        series of current class
+
+        '''
+        # Ensure date time
+        date1, date2 = self.parseDate(date1), self.parseDate(date2)
+        # Create new instance
+        newSubset = self.reproduce()
+        newXR = self.xr.sel(time=slice(date1, date2))
+        # Add data
+        newSubset.initXR(newXR)
+        # Get current bounding box and subset
+        bbox = self._xrBoundingBox(self.subset)
+        newSubset.subSetData(bbox)
+        # Return result
+        return newSubset
+        
+    def _getTimes(self):
+       ''' Load times from Xarray for instances that track start and times'''
+       if len(self.xr.time1.data.shape) == 0:
+           self.time1 = [self.xr.time1.item()]
+       else:
+           self.time1 = [self.datetime64ToDatetime(x)
+                         for x in self.xr.time1.data]
+       if len(self.xr.time2.data.shape) == 0:
+           self.time1 = [self.xr.time2.item()]
+       else:
+           self.time2 = [self.datetime64ToDatetime(x)
+                         for x in self.xr.time2.data]      
+
     #
     # ---- def setup xy coordinates
     #

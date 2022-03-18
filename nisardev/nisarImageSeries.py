@@ -123,7 +123,7 @@ class nisarImageSeries(nisarBase2D):
     # ------------------------------------------------------------------------
     # I/O Routines
     # ------------------------------------------------------------------------
-
+        
     def readSeriesFromTiff(self, fileNames, url=False, stackVar=None,
                            index1=3, index2=4, dateFormat='%d%b%y',
                            overviewLevel=None):
@@ -174,12 +174,7 @@ class nisarImageSeries(nisarBase2D):
         self.variables = self.myVariables(self.imageType)
         self.subSetImage(bBox)
         self.xr = self.xr.rename('ImageSeries')
-        self.time = [self.datetime64ToDatetime(x)
-                     for x in self.xr.time.data]
-        self.time1 = [self.datetime64ToDatetime(x)
-                      for x in self.xr.time1.data]
-        self.time2 = [self.datetime64ToDatetime(x)
-                      for x in self.xr.time2.data]
+        self._getTimes()
 
     def readSeriesFromNetCDF(self, cdfFile):
         '''
@@ -200,9 +195,25 @@ class nisarImageSeries(nisarBase2D):
         self.variables = list(self.xr.band.data)
         self.subset = self.xr
         # get times
-        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
-        self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
-        self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
+        self._getTimes()
+        
+    def timeSliceImage(self, date1, date2):
+        ''' Create a new imageSeries for the range date1 to date2
+        Parameters
+        ----------
+        date1 : Tdatetime or "YYYY-MM-DD"
+            First date in range.
+        date2 : TYPE
+            Second date in range.
+
+        Returns
+        -------
+        series new velSeries
+        '''
+        newSeries = self.timeSliceData(date1, date2)
+        # get times
+        newSeries._getTimes()
+        return newSeries
 
     def subSetImage(self, bbox):
         ''' Subset dataArray to a bounding box

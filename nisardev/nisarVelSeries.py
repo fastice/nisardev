@@ -191,18 +191,9 @@ class nisarVelSeries(nisarBase2D):
         # Spatial parameters derived from the first velMap
         self.subSetVel(bBox)
         self.xr = self.xr.rename('VelocitySeries')
-        self.time = [self.datetime64ToDatetime(x)
-                     for x in self.xr.time.data]
-        if len(self.xr.time1.data.shape) == 0:
-            self.time1 = [self.xr.time1.item()]
-        else:
-            self.time1 = [self.datetime64ToDatetime(x)
-                          for x in self.xr.time1.data]
-        if len(self.xr.time2.data.shape) == 0:
-            self.time1 = [self.xr.time2.item()]
-        else:
-            self.time2 = [self.datetime64ToDatetime(x)
-                          for x in self.xr.time2.data]
+        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
+        # Update times
+        self._getTimes()
 
     def _addSpeedSeries(self):
         ''' Add speed if only have vx and vy '''
@@ -221,7 +212,7 @@ class nisarVelSeries(nisarBase2D):
         if 'vv' not in self.variables:
             self.variables.append('vv')
         self._mapVariables()
-
+        
     def readSeriesFromNetCDF(self, cdfFile):
         '''
         Read a cdf file previously saved by a velSeries instance.
@@ -244,12 +235,27 @@ class nisarVelSeries(nisarBase2D):
 
             self._addSpeedSeries()
             self.subset = self.xr
-
         # get times
-        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
-        self.time1 = [self.datetime64ToDatetime(x) for x in self.xr.time1.data]
-        self.time2 = [self.datetime64ToDatetime(x) for x in self.xr.time2.data]
+        self._getTimes()
+        
+    def timeSliceVel(self, date1, date2):
+        ''' Create a new velSeries for the range date1 to date2
+        Parameters
+        ----------
+        date1 : Tdatetime or "YYYY-MM-DD"
+            First date in range.
+        date2 : TYPE
+            Second date in range.
 
+        Returns
+        -------
+        series new velSeries
+        '''
+        newSeries = self.timeSliceData(date1, date2)
+        # get times
+        newSeries._getTimes()
+        return newSeries
+        
     def subSetVel(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
         Parameters
