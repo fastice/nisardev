@@ -375,13 +375,15 @@ class nisarBase2D():
         
     def _getTimes(self):
        ''' Load times from Xarray for instances that track start and times'''
-       if len(self.xr.time1.data.shape) == 0:
-           self.time1 = [self.xr.time1.item()]
+       if len(self.xr.time1.data.shape) == 0: 
+           self.time1 = [self.datetime64ToDatetime(
+               np.datetime64(self.xr.time1.item(), 'ns'))]
        else:
            self.time1 = [self.datetime64ToDatetime(x)
                          for x in self.xr.time1.data]
        if len(self.xr.time2.data.shape) == 0:
-           self.time1 = [self.xr.time2.item()]
+           self.time2 = [self.datetime64ToDatetime(
+               np.datetime64(self.xr.time2.item(), 'ns'))]
        else:
            self.time2 = [self.datetime64ToDatetime(x)
                          for x in self.xr.time2.data]      
