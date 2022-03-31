@@ -299,20 +299,22 @@ class cvPoints:
         ''' decorator for computing stats routines '''
         # create a table
         def pandasTable(muX, muY, sigX, sigY, rmsX, rmsY,  nPts,
-                        threshX, threshY, midDate):
+                        threshX, threshY, date1, date2):
+            midDateStr = \
+                f'{date1.strftime("%Y-%m-%d")} - {date2.strftime("%Y-%m-%d")}'
             dfData = pd.DataFrame([[muX, muY, sigX, sigY, rmsX, rmsY]],
                                   columns=pd.MultiIndex.from_product(
                                   [['Mean', 'Sigma', 'RMS'],
                                    ['$$v_x-u_x$$', '$$v_y-u_y$$']]),
-                                  index=pd.Index([midDate]))
+                                  index=pd.Index([midDateStr]))
             dfPoints = pd.DataFrame([[nPts]],
                                     columns=pd.MultiIndex.from_product(
                                         [['Count'], ['n']]),
-                                    index=pd.Index([midDate]))
+                                    index=pd.Index([midDateStr]))
             dfThresh = pd.DataFrame([[threshX, threshY]],
                                     columns=pd.MultiIndex.from_product(
                                         [['Threshold'], ['x', 'y']]),
-                                    index=pd.Index([midDate]))
+                                    index=pd.Index([midDateStr]))
             df = pd.concat([dfData, dfPoints, dfThresh], axis=1)
             return muX, muY, sigX, sigY, rmsX, rmsY, nPts, threshX, threshY, df
         # the actual stats
@@ -323,7 +325,7 @@ class cvPoints:
             if 'units' in kwargs:
                 print('units is not an option for this function')
                 return None
-            x, y, iPts, midDate = func(*args, date=date)
+            x, y, iPts, date1, date2 = func(*args, date=date)
             dvx, dvy = args[0].cvDifferences(x, y, iPts, args[1], date=date)
             iGood = np.isfinite(dvx)
             #
@@ -344,7 +346,7 @@ class cvPoints:
                 return muX, muY, sigX, sigY, rmsX, rmsY, sum(iGood)
             else:
                 return pandasTable(muX, muY, sigX, sigY, rmsX, rmsY,
-                                   sum(iGood), threshX, threshY, midDate)
+                                   sum(iGood), threshX, threshY, date1, date2)
         return mstd
 
     @_stats
@@ -352,13 +354,17 @@ class cvPoints:
         ''' get stats for cvpoints in range (minv,maxv) '''
         x, y = self.xyVRange(minv, maxv, units='m')
         iPts = self.vRangeCVs(minv, maxv)
-        if date is None:
-            dateReturn = vel.midDate.strftime('%Y-%m-%d')
+        if date is None or len(vel.subset.time1.shape) == 0:
+            date1 = vel.time1[0]
+            date2 = vel.time2[0]
         else:
-            dateReturn = vel.datetime64ToDatetime(
-                vel.subset.time.sel(time=vel.parseDate(date),
-                                    method='nearest').data)
-        return x, y, iPts, dateReturn
+            date1 = vel.datetime64ToDatetime(
+                    vel.subset.time1.sel(time=vel.parseDate(date),
+                                         method='nearest').data)
+            date2 = vel.datetime64ToDatetime(
+                    vel.subset.time2.sel(time=vel.parseDate(date),
+                                         method='nearest').data)
+        return x, y, iPts, date1, date2
 
     def statsStyle(self, styler, thresh=1.0, caption=None):
         '''
