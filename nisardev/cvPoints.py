@@ -355,8 +355,12 @@ class cvPoints:
         x, y = self.xyVRange(minv, maxv, units='m')
         iPts = self.vRangeCVs(minv, maxv)
         if date is None or len(vel.subset.time1.shape) == 0:
-            date1 = vel.time1[0]
-            date2 = vel.time2[0]
+            if type(vel.time1) == list:
+                date1 = vel.time1[0]
+                date2 = vel.time2[0]
+            else:
+                date1 = vel.time1
+                date2 = vel.time2
         else:
             date1 = vel.datetime64ToDatetime(
                     vel.subset.time1.sel(time=vel.parseDate(date),
