@@ -131,7 +131,7 @@ class nisarVelSeries(nisarBase2D):
     def readSeriesFromTiff(self, fileNames, useVelocity=True, useErrors=False,
                            readSpeed=False, url=False, stackVar=None,
                            index1=4, index2=5, dateFormat='%d%b%y',
-                           overviewLevel=None):
+                           overviewLevel=None, suffix=''):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -163,6 +163,8 @@ class nisarVelSeries(nisarBase2D):
         overviewLevel: int
             Overview (pyramid) level to read: None->full res, 0->1/2 res,
             1->1/4 res....to image dependent max downsampling level
+        suffix : str, optional
+            Any suffix that needs to be appended (e.g., for dropbox links)
         Returns
         -------
         None.
@@ -178,7 +180,8 @@ class nisarVelSeries(nisarBase2D):
                                        url=url, stackVar=stackVar,
                                        index1=index1, index2=index2,
                                        dateFormat=dateFormat,
-                                       overviewLevel=overviewLevel)
+                                       overviewLevel=overviewLevel,
+                                       suffix=suffix)
                 self.velMaps.append(myVel)
         bBox = myVel.boundingBox(units='m')
         # Combine individual bands

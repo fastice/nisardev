@@ -126,7 +126,7 @@ class nisarImageSeries(nisarBase2D):
         
     def readSeriesFromTiff(self, fileNames, url=False, stackVar=None,
                            index1=3, index2=4, dateFormat='%d%b%y',
-                           overviewLevel=None):
+                           overviewLevel=None, suffix=''):
         '''
         read in a tiff product fileNameBase.*.tif. If
         Files can be read as np arrays of xarrays (useXR=True, not well tested)
@@ -147,6 +147,8 @@ class nisarImageSeries(nisarBase2D):
         overviewLevel: int
             Overview (pyramid) level to read: None->full res, 0->1/2 res,
             1->1/4 res....to image dependent max downsampling level
+        suffix : str, optional
+            Any suffix that needs to be appended (e.g., for dropbox links)
         Returns
         -------
         None.
@@ -159,7 +161,8 @@ class nisarImageSeries(nisarBase2D):
                                      url=url, stackVar=stackVar,
                                      index1=index1, index2=index2,
                                      dateFormat=dateFormat,
-                                     overviewLevel=overviewLevel)
+                                     overviewLevel=overviewLevel,
+                                     suffix=suffix)
             self.imageMaps.append(myImage)
         bBox = myImage.boundingBox(units='m')
         self.imageType = myImage.imageType

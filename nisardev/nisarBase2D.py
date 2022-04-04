@@ -85,7 +85,7 @@ class nisarBase2D():
 
     def readXR(self, fileNameBase, url=False, masked=False, stackVar=None,
                time=None, time1=None, time2=None, xrName='None', skip=[],
-               overviewLevel=None):
+               overviewLevel=None, suffix=''):
         ''' Use read data into rioxarray variable
         Parameters
         ----------
@@ -105,12 +105,15 @@ class nisarBase2D():
         overviewLevel: int
             Overview (pyramid) level to read: None->full res, 0->1/2 res,
             1->1/4 res....to image dependent max downsampling level
+        suffix : str, optional
+            Any suffix that needs to be appended (e.g., for dropbox links)
         '''
         # Do a lazy open on the tiffs
         if stackVar is None:
             myXR = self._lazy_openTiff(fileNameBase, url=url, masked=masked,
                                        time=time, xrName=xrName, skip=skip,
-                                       overviewLevel=overviewLevel)
+                                       overviewLevel=overviewLevel,
+                                       suffix=suffix)
         else:  # Not debugged
             items = self._construct_stac_items(fileNameBase, stackVar,
                                                xrName=xrName, url=url,
@@ -259,7 +262,7 @@ class nisarBase2D():
 
     # @dask.delayed
     def _lazy_openTiff(self, fileNameBase, masked=True, url=False, time=None,
-                       xrName='None', skip=[], overviewLevel=None):
+                       xrName='None', skip=[], overviewLevel=None, suffix=''):
         '''
         Lazy open of a single velocity product
         Parameters
@@ -294,7 +297,7 @@ class nisarBase2D():
             bandTiff = fileNameBase
             if url:
                 bandTiff = f'/vsicurl/{option}&url={fileNameBase}'
-            bandTiff = bandTiff.replace('*', band) + '.tif'
+            bandTiff = bandTiff.replace('*', band) + '.tif' + suffix
             # read file via rioxarry
             da = rioxarray.open_rasterio(bandTiff, lock=True,
                                          default_name=fileNameBase,

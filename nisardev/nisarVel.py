@@ -117,6 +117,7 @@ class nisarVel(nisarBase2D):
         dv['band'] = ['vv']
         dv['time'] = self.xr['time']
         dv['name'] = self.xr['name']
+        dv['_FillValue'] = -1
         # Add to existing xr with vx and vy
         self.xr = xr.concat([self.xr, dv], dim='band', join='override',
                             combine_attrs='drop')
@@ -128,7 +129,7 @@ class nisarVel(nisarBase2D):
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
                          readSpeed=False, url=False, stackVar=None,
                          index1=4, index2=5, dateFormat='%d%b%y',
-                         overviewLevel=None, masked=True):
+                         overviewLevel=None, masked=True, suffix=''):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -173,7 +174,8 @@ class nisarVel(nisarBase2D):
             skip = ['vv']  # Force skip
         self.readXR(fileNameBase, url=url, masked=True, stackVar=stackVar,
                     time=self.midDate, skip=skip, time1=self.date1,
-                    time2=self.date2, overviewLevel=overviewLevel)
+                    time2=self.date2, overviewLevel=overviewLevel,
+                    suffix=suffix)
         # compute speed rather than download
         if not readSpeed and useVelocity:
             self._addSpeed()
