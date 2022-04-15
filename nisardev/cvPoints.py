@@ -13,6 +13,8 @@ import matplotlib.pylab as plt
 from nisardev import myError
 import pandas as pd
 import dask
+from datetime import datetime
+import pandas as pd
 
 
 class cvPoints:
@@ -62,6 +64,8 @@ class cvPoints:
         self.wktFile = wktFile
         self.llproj = "EPSG:4326"  # Used for conversions
         self.xyproj = None  # Defined once epsg set.
+        #
+        self.static = True
         if cvFile is not None:
             self.readCVs(cvFile=cvFile)
 
@@ -76,6 +80,8 @@ class cvPoints:
         -------
         None.
         '''
+        if type(cvFile) is list:
+            self.static = False
         self.cvFile = cvFile
 
     def checkCVFile(self):
@@ -91,8 +97,14 @@ class cvPoints:
         '''
         if self.cvFile is None:
             myError("No cvfile specified")
-        if not os.path.exists(self.cvFile):
-            myError("cvFile: {0:s} does not exist".format(self.cvFile))
+        # 
+        if self.static:
+            cvFiles = [self.cvFile]
+        else:
+            cvFiles = self.cvFile
+        for cvFile in cvFiles:
+            if not os.path.exists(cvFile):
+                myError("cvFile: {0:s} does not exist".format(cvFile))
 
     def readWKT(self, wktFile):
         ''' get wkt from a file '''
@@ -121,8 +133,60 @@ class cvPoints:
     #
     # ===================== Cv input/output stuff ============================
     #
-
     def readCVs(self, cvFile=None):
+        ''' Read either single static file or multiple time varying files'''
+        self.setCVFile(cvFile)
+        self.checkCVFile()
+        if self.static:
+            self._readStaticCVs()
+        else:
+            self._readTimeVaryingCVs()
+
+
+    def _readTimeVaryingCVs(self):
+        ''' Read list of CV files and save result '''
+        self.ptData = []
+        for pointFile in self.cvFile:
+            self.ptData.append(self._readPointCVFile(pointFile))
+        # Force calculations with all data
+        self.velocityForDateRange('1900-01-01', '2100-01-01')
+        
+    def velocityForDateRange(self, date1, date2):
+        ''' Update velocity with new date range'''
+        for var in ['lat', 'lon','vx','vy']:
+            setattr(self, var, [])
+    
+        for pt in self.ptData:
+            ptForDate = pt.loc[(pt.Date >= date1) & (pt.Date <= date2)]
+            ptMean = ptForDate.loc[:,['lat', 'lon','vx','vy', 'vv']].mean()
+            #
+            self.vx.append(ptMean['vx'])
+            self.vy.append(ptMean['vy'])
+            self.lat.append(ptMean['lat'])
+            self.lon.append(ptMean['lon'])
+        # convert to np
+        for var in ['vx', 'vy', 'lat', 'lon']:
+            setattr(self, var, np.array(getattr(self, var)))
+        self.vh = np.sqrt(self.vx**2 + self.vy**2)
+        self.setSRS()
+        self.x, self.y = self.lltoxy(self.lat, self.lon)
+            
+    def _readPointCVFile(self, pointFile):
+        ''' Read a single GPS Vel file '''
+        points = []
+        with open(pointFile) as fpPts:
+            for line in fpPts:
+                if '%' not in line:
+                    pieces = line.split(',')
+                    lineDate = [datetime.strptime(pieces[0].strip(),
+                                                  '%Y-%m-%d')]
+                    data = [float(x.strip()) for x in pieces[2:-1]]
+                    points.append(lineDate + data)
+        return pd.DataFrame(points, columns=['Date','lat','lon','vx',
+                                                 'vx_sigma', 'vy', 'vy_sigma',
+                                                 'vv', 'vv_sigma'])
+                
+    def _readStaticCVs(self):
         '''
         Read cv points, set projection based on hemisphere, convert to x,y (m)
         Parameters
@@ -133,8 +197,6 @@ class cvPoints:
         -------
         None.
         '''
-        self.setCVFile(cvFile)
-        self.checkCVFile()
         #
         cvCols = [latv, lonv, zv, vxv, vyv, vzv, weight] = \
             [], [], [], [], [], [], []

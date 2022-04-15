@@ -117,10 +117,13 @@ class nisarVel(nisarBase2D):
         dv['band'] = ['vv']
         dv['time'] = self.xr['time']
         dv['name'] = self.xr['name']
-        dv['_FillValue'] = -1
+        dv['_FillValue'] = self.noDataDict['vv']
         # Add to existing xr with vx and vy
         self.xr = xr.concat([self.xr, dv], dim='band', join='override',
                             combine_attrs='drop')
+        # Fix order of coordinates - force vx, vy, vv, ex...
+        self._setBandOrder(
+            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4 ,'dT': 5})  
         #
         if 'vv' not in self.variables:
             self.variables.append('vv')
@@ -205,6 +208,9 @@ class nisarVel(nisarBase2D):
                 'vy' in self.variables:
             self._addSpeed()
             self.subset = self.xr
+        self._setBandOrder(
+             {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4 ,'dT': 5})  
+        self.subset = self.xr
         # set times
         self.time = [np.datetime64(self.xr.time.item(), 'ns')]
         self.time1 = [np.datetime64(self.xr.time1.item(), 'ns')]
@@ -272,7 +278,7 @@ class nisarVel(nisarBase2D):
                    titleFontSize=titleFontSize,
                    labelFontSize=labelFontSize,  colorBar=True,
                    scale='linear', axisOff=False, midDate=True,
-                   vmin=0, vmax=7000, percentile=100, **kwargs):
+                   vmin=0, vmax=7000, percentile=100, wrap=None, **kwargs):
         '''
         Use matplotlib to show velocity in a single subplot with a color
         bar. Clip to absolute max set by maxv, though in practives percentile
@@ -299,6 +305,8 @@ class nisarVel(nisarBase2D):
             min velocity to display. The default is 0.
         percentile : number, optional
             percentile to clip display at. The default is 100
+        wrap :  number, optional
+            Display velocity modululo wrap value
         **kwargs : dict
             kwargs passed to imshow.
         Returns
@@ -320,4 +328,4 @@ class nisarVel(nisarBase2D):
                         labelFontSize=self.labelFontSize, midDate=midDate,
                         colorBarLabel='Speed (m/yr)', vmax=vmax, vmin=vmin,
                         axisOff=axisOff, colorBar=colorBar,
-                        scale=scale, **kwargs)
+                        scale=scale, wrap=wrap, **kwargs)

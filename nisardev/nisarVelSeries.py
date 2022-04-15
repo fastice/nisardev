@@ -226,18 +226,20 @@ class nisarVelSeries(nisarBase2D):
         Returns
         -------
         None.
-
         '''
         # Read the date
         self.readFromNetCDF(cdfFile)
         # Initialize various variables.
+       
         self.nLayers = len(self.xr.time.data)
         self.variables = list(self.xr.band.data)
         if 'vv' not in self.variables and 'vx' in self.variables and \
                 'vy' in self.variables:
-
             self._addSpeedSeries()
-            self.subset = self.xr
+        # fix band order
+        self._setBandOrder(
+            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4 ,'dT': 5})  
+        self.subset = self.xr
         # get times
         self._getTimes()
         
@@ -284,7 +286,7 @@ class nisarVelSeries(nisarBase2D):
                           autoScale=True, scale='linear', axisOff=False,
                           colorBar=True,
                           vmin=0, vmax=7000, percentile=100,
-                          colorBarLabel='Speed (m/yr)', **kwargs):
+                          colorBarLabel='Speed (m/yr)', wrap=None, **kwargs):
         '''
          Use matplotlib to show a velocity layer selected by date.
          Clip to absolute max set by maxv, though in practives percentile
@@ -314,6 +316,8 @@ class nisarVelSeries(nisarBase2D):
             min velocity to display. The default is 0.
         percentile : number, optional
             percentile to clip display at. The default is 100
+        wrap :  number, optional
+             Display velocity modululo wrap value
         **kwargs : dict
             kwargs passed to imshow.
         Returns
@@ -338,7 +342,7 @@ class nisarVelSeries(nisarBase2D):
                         titleFontSize=titleFontSize,
                         axisOff=axisOff, colorBar=colorBar,
                         colorBarLabel=colorBarLabel, vmax=vmax, vmin=vmin,
-                        scale=scale, **kwargs)
+                        scale=scale, wrap=wrap, **kwargs)
 
     @classmethod
     def reproduce(cls):

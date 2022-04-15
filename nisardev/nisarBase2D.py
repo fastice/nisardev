@@ -386,7 +386,24 @@ class nisarBase2D():
                            getattr(self.xr, time).item(), 'ns'))])
            else:
                setattr(self, time, [self.datetime64ToDatetime(x)
-                                    for x in getattr(self.xr, time).data] )     
+                                    for x in getattr(self.xr, time).data] )  
+               
+    def _setBandOrder(self, bandOrder):
+        '''
+        Ensure band order is correct
+        Returns
+        -------
+        None.
+        '''
+        bandOrderList = []
+        # Create list for sort
+        for b in self.xr.band:
+            bandOrderList.append(bandOrder[b.item()])
+        # creete array for sort
+        myOrderXR = xr.DataArray(bandOrderList, coords=[self.xr['band']], 
+                                 dims='band')
+        # do sort
+        self.xr = self.xr.sortby(myOrderXR)
 
     #
     # ---- def setup xy coordinates
@@ -933,7 +950,7 @@ class nisarBase2D():
                    vmin=0, vmax=7000, units='m', scale='linear', cmap=None,
                    title=None, midDate=True, colorBarLabel='Speed (m/yr)',
                    masked=None, colorBarPosition='right', colorBarSize='5%',
-                   colorBarPad=0.05,
+                   colorBarPad=0.05, wrap=None,
                    **kwargs):
         '''
         Use matplotlib to show velocity in a single subplot with a color
@@ -945,6 +962,8 @@ class nisarBase2D():
             Pass in an existing figure. The default is None.
         maxv : float or int, optional
             max velocity. The default is 7000.
+        wrap :  number, optional
+            Display velocity modululo wrap value
         Returns
         -------
         fig : matplot lib fig
@@ -970,6 +989,8 @@ class nisarBase2D():
         displayVar = displayVar.sel(time=date, method='nearest')
         # Display the data
         displayVar = np.squeeze(displayVar)
+        if wrap is not None:
+            displayVar  = np.mod(displayVar, wrap)
         
         pos = ax.imshow(np.ma.masked_where(displayVar == masked, displayVar,
                                            copy=True), norm=norm, cmap=cmap,
