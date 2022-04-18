@@ -117,7 +117,7 @@ class nisarImage(nisarBase2D):
 
     def readDataFromTiff(self, fileNameBase, url=False, stackVar=None,
                          dateFormat='%d%b%y', index1=3, index2=4,
-                         overviewLevel=None):
+                         overviewLevel=None, suffix=''):
         '''
         read in a tiff product fileNameBase.*[,tif], tif ext optional.
         Files can be read as np arrays of xarrays (useXR=True, not well tested)
@@ -133,6 +133,8 @@ class nisarImage(nisarBase2D):
         overviewLevel: int
             Overview (pyramid) level to read: None->full res, 0->1/2 res,
             1->1/4 res....to image dependent max downsampling level
+        suffix : str, optional
+            Any suffix that needs to be appended (e.g., for dropbox links)
         Returns
         -------
         None.
@@ -147,7 +149,7 @@ class nisarImage(nisarBase2D):
         #
         self.readXR(fileNameBase, url=url, masked=False, stackVar=stackVar,
                     time=self.midDate, time1=self.date1,
-                    time2=self.date2, overviewLevel=overviewLevel)
+                    time2=self.date2, overviewLevel=overviewLevel, suffix=suffix)
         # Rename with to image type
         self.xr = self.xr.rename(self.imageType)
         self.fileNameBase = fileNameBase  # save filenameBase
