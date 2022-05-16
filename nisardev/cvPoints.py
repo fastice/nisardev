@@ -512,9 +512,6 @@ class cvPoints:
         summary['percentCoverage'] = \
             summary['nGoodPoints'] / summary['totalPoints'] * 100.
         return df, summary
-            
-        #print(sigmaX, sigmaY, nGood, threshX, threshY)
-        #sigmaX, sigmaY = np.array(result['dvx'])
 
     def statsStyle(self, styler, thresh=1.0, caption=None):
         '''
