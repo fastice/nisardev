@@ -15,6 +15,7 @@ import pandas as pd
 import dask
 from datetime import datetime
 import pandas as pd
+import matplotlib.colors as mcolors
 
 
 class cvPoints:
@@ -97,7 +98,7 @@ class cvPoints:
         '''
         if self.cvFile is None:
             myError("No cvfile specified")
-        # 
+        #
         if self.static:
             cvFiles = [self.cvFile]
         else:
@@ -133,6 +134,7 @@ class cvPoints:
     #
     # ===================== Cv input/output stuff ============================
     #
+
     def readCVs(self, cvFile=None):
         ''' Read either single static file or multiple time varying files'''
         self.setCVFile(cvFile)
@@ -142,7 +144,6 @@ class cvPoints:
         else:
             self._readTimeVaryingCVs()
 
-
     def _readTimeVaryingCVs(self):
         ''' Read list of CV files and save result '''
         self.ptData = []
@@ -150,15 +151,15 @@ class cvPoints:
             self.ptData.append(self._readPointCVFile(pointFile))
         # Force calculations with all data
         self.velocityForDateRange('1900-01-01', '2100-01-01')
-        
+
     def velocityForDateRange(self, date1, date2):
         ''' Update velocity with new date range'''
-        for var in ['lat', 'lon','vx','vy']:
+        for var in ['lat', 'lon', 'vx', 'vy']:
             setattr(self, var, [])
-    
+
         for pt in self.ptData:
             ptForDate = pt.loc[(pt.Date >= date1) & (pt.Date <= date2)]
-            ptMean = ptForDate.loc[:,['lat', 'lon','vx','vy', 'vv']].mean()
+            ptMean = ptForDate.loc[:, ['lat', 'lon', 'vx', 'vy', 'vv']].mean()
             #
             self.vx.append(ptMean['vx'])
             self.vy.append(ptMean['vy'])
@@ -167,10 +168,10 @@ class cvPoints:
         # convert to np
         for var in ['vx', 'vy', 'lat', 'lon']:
             setattr(self, var, np.array(getattr(self, var)))
-        self.vh = np.sqrt(self.vx**2 + self.vy**2)
+        self.vv = np.sqrt(self.vx**2 + self.vy**2)
         self.setSRS()
         self.x, self.y = self.lltoxy(self.lat, self.lon)
-            
+
     def _readPointCVFile(self, pointFile):
         ''' Read a single GPS Vel file '''
         points = []
@@ -180,12 +181,12 @@ class cvPoints:
                     pieces = line.split(',')
                     lineDate = [datetime.strptime(pieces[0].strip(),
                                                   '%Y-%m-%d')]
-                    data = [float(x.strip()) for x in pieces[2:-1]]
+                    data = [float(x.strip()) for x in pieces[2:]]
                     points.append(lineDate + data)
-        return pd.DataFrame(points, columns=['Date','lat','lon','vx',
-                                                 'vx_sigma', 'vy', 'vy_sigma',
-                                                 'vv', 'vv_sigma'])
-                
+        return pd.DataFrame(points, columns=['Date', 'lat', 'lon', 'vx',
+                                             'vx_sigma', 'vy', 'vy_sigma',
+                                             'vv', 'vv_sigma'])
+
     def _readStaticCVs(self):
         '''
         Read cv points, set projection based on hemisphere, convert to x,y (m)
@@ -220,7 +221,7 @@ class cvPoints:
                 zip(['lat', 'lon', 'z', 'vx', 'vy', 'vz', 'weight'], cvCols):
             setattr(self, f'{var}', np.append(getattr(self, f'{var}'), cvCol))
         #
-        self.vh = np.sqrt(self.vx**2 + self.vy**2)
+        self.vv = np.sqrt(self.vx**2 + self.vy**2)
         #
         self.setSRS()
         self.nocull = np.ones(self.vx.shape, dtype=bool)  # set all to no cull
@@ -278,7 +279,7 @@ class cvPoints:
         bool
             List of all zero points (speed < 0.00001) indicated by T & F val.
         '''
-        return np.abs(self.vh) < 0.00001
+        return np.abs(self.vv) < 0.00001
 
     def vRangeCVs(self, minv, maxv):
         '''
@@ -288,7 +289,7 @@ class cvPoints:
         bool
             List of points in range (vmin,vmax) indicated by T & F val.
         '''
-        return np.logical_and(self.vh >= minv, self.vh < maxv)
+        return np.logical_and(self.vv >= minv, self.vv < maxv)
 
     def allCVs(self):
         '''
@@ -298,7 +299,7 @@ class cvPoints:
         bool
             List of all valid points (speed >=0) indicated by T & F val.
         '''
-        return np.abs(self.vh) >= 0
+        return np.abs(self.vv) >= 0
 
     def NzeroCVs(self):
         '''
@@ -357,6 +358,21 @@ class cvPoints:
     # ---- Stats Stuff
     #
 
+    def computeThreshMean(self, iPts, iGood, absError=1,
+                      percentError=0.03):
+        threshX = np.sqrt(np.mean(
+            (np.ones(iGood.shape)[iGood] * absError)**2 +
+            (self.vx[iPts][iGood] * percentError)**2))
+        threshY = np.sqrt(np.mean(
+            (np.ones(iGood.shape)[iGood] * absError)**2 +
+            (self.vy[iPts][iGood] * percentError)**2))
+        return threshX, threshY
+    
+    def computeThresh(self, absError=1, percentError=0.03):
+        threshX = np.sqrt( absError**2 + (self.vx * percentError)**2)
+        threshY = np.sqrt( absError**2 + (self.vy * percentError)**2)
+        return threshX, threshY
+    
     def _stats(func):
         ''' decorator for computing stats routines '''
         # create a table
@@ -394,12 +410,10 @@ class cvPoints:
             dvx = dvx[iGood]
             dvy = dvy[iGood]
             #
-            threshX = np.sqrt(np.mean(
-                (np.ones(iGood.shape)[iGood] * absError)**2 +
-                (args[0].vx[iPts][iGood] * percentError)**2))
-            threshY = np.sqrt(np.mean(
-                (np.ones(iGood.shape)[iGood] * absError)**2 +
-                (args[0].vy[iPts][iGood] * percentError)**2))
+            #print(args[0].vx.shape, iPts.shape, iGood.shape)
+            threshX, threshY = args[0].computeThreshMean(iPts, iGood,
+                                                     absError=absError,
+                                                     percentError=percentError)
             muX, muY = np.average(dvx), np.average(dvy)
             rmsX = np.sqrt(np.average(dvx**2))
             rmsY = np.sqrt(np.average(dvy**2))
@@ -431,6 +445,76 @@ class cvPoints:
                     vel.subset.time2.sel(time=vel.parseDate(date),
                                          method='nearest').data)
         return x, y, iPts, date1, date2
+
+    def timeSeriesStats(self, myVelSeries, minv, maxv):
+        '''
+        Compute stats for time series
+        Parameters
+        ----------
+        myVelSeries : velSeries
+            A nisardev velocity time series.
+        minv : number
+            Only includ points >= minv.
+        maxv : number
+            Only include points <- maxv.
+
+        Returns
+        -------
+        df : pandas dataframe
+            Data frame with the results.
+
+        '''
+        result = self.timeSeriesDifferences(myVelSeries, minv, maxv)
+        nPts = result['dvx'].shape[1]
+        sigmaX, sigmaY = np.zeros(nPts), np.zeros(nPts)
+        meanX, meanY = np.zeros(nPts), np.zeros(nPts)
+        threshX, threshY = np.zeros(nPts), np.zeros(nPts)
+        nGood =  np.zeros((nPts, 1), dtype='i4')
+        summary = {}
+        summary['nPts'] = nPts
+        for pt in range(0, nPts):
+            for mean, sigma, thresh, band in zip([meanX, meanY],
+                                                 [sigmaX, sigmaY],
+                                                 [threshX, threshY],
+                                                 ['vx', 'vy']):
+                mean[pt] = np.nanmean(result[f'd{band}'][:, pt])    
+                sigma[pt] = np.nanstd(result[f'd{band}'][:, pt])
+                thresh[pt] = np.sqrt(np.mean(
+                    result[f'thresh{band}'][:, pt]**2))
+            #
+            nGood[pt] = int(np.sum(np.isfinite(result['vx'][:, pt])))
+        
+        rmsX = np.sqrt(meanX**2 + sigmaX**2)
+        rmsY = np.sqrt(meanY**2 + sigmaY**2)    
+        summaryStats = np.array([meanX, meanY, sigmaX, sigmaY,
+                                 rmsX, rmsY]).transpose()
+        
+        dfData = pd.DataFrame(summaryStats,
+                              columns=pd.MultiIndex.from_product(
+                              [['Mean', 'Sigma', 'RMS'],
+                               ['$$v_x-u_x$$', '$$v_y-u_y$$']]),
+                              index=range(1,nPts+1))   
+        dfPoints = pd.DataFrame(nGood,
+                                columns=pd.MultiIndex.from_product(
+                                    [['Count'], ['n']]),
+                                index=range(1,nPts+1))
+        dfThresh = pd.DataFrame(np.array([threshX, threshY]).transpose(),
+                                columns=pd.MultiIndex.from_product(
+                                    [['Threshold'], ['x', 'y']]),
+                                index=range(1,nPts+1))
+        df = pd.concat([dfData, dfPoints, dfThresh], axis=1)
+        summary['nPassed'] = (
+            (df["RMS"]['$$v_x-u_x$$'] <  df["Threshold"]['x']).sum() + 
+            (df["RMS"]['$$v_y-u_y$$'] < df["Threshold"]['y']).sum())
+        summary['nGoodPoints'] = nGood.sum()
+        summary['totalPoints'] = \
+            result['vx'].shape[0] * result['vx'].shape[1]
+        summary['percentCoverage'] = \
+            summary['nGoodPoints'] / summary['totalPoints'] * 100.
+        return df, summary
+            
+        #print(sigmaX, sigmaY, nGood, threshX, threshY)
+        #sigmaX, sigmaY = np.array(result['dvx'])
 
     def statsStyle(self, styler, thresh=1.0, caption=None):
         '''
@@ -699,6 +783,86 @@ class cvPoints:
     # ===================== CV plot differences ===============================
     #
 
+    def _genPlotColors(self, nColors):
+        '''
+        Create a color table for plots with repeating colors if needed.
+
+        Parameters
+        ----------
+        nColors : int
+            The Numpber of colors to create.
+        Returns
+        -------
+        colors : list
+            List of colors.
+        '''
+        colors = mcolors.TABLEAU_COLORS.values()
+        # Cycle colors if more are needed
+        while len(colors) < nColors:
+            colors += mcolors.TABLEAU_COLORS.values()
+        return colors
+    
+
+
+    def plotTimesSeriesData(self, myVelSeries, minv, maxv,
+                            bands=['vv'], figsize=None, labelFontSize=14,
+                            nTicks=None):
+        '''
+        Plot a time varying series of cal/val points for a velocity series
+        for a specified range of speeds.
+        Parameters
+        ----------
+        myVelSeries : velSeries
+            A nisardev velocity time series.
+        minv : number
+            Only includ points >= minv.
+        maxv : number
+            Only include points <- maxv.
+        bands : list, optional
+            List of bands ('vx', 'vy', or 'vv'). The default is ['vv'].
+        figsize :  tuple, optional
+            Size of figure The default is None, which yields (7*nbands, 5).
+        labelFontSize : number, optional
+            Fontsize for labels. The default is 14.
+        nTicks : int, optional
+            The number of ticks to use on x-axis. The default is None.
+        Returns
+        -------
+        None.
+        '''
+        # Compute point by point differences
+        result = self.timeSeriesDifferences(myVelSeries, minv, maxv)
+        # Plot stuff
+        if figsize is None:
+            figsize = (7*len(bands), 5)
+        colors = self._genPlotColors(len(result['vv']))
+
+        fig, axes = plt.subplots(1, len(bands), figsize=figsize)
+        ylabels = {'vx': '$v_x, u_x$', 'vy': '$v_y, u_y$',
+                   'vv': '$|v|$'', ''$|u|$'}
+        #
+        if len(bands) == 1:
+            axes = np.array([axes])
+        # Loop over bands to plot
+        for band, ax in zip(bands, axes.flatten()):
+            # Loop over point to plot
+            for i, color in zip(range(result['vv'].shape[1]), colors):
+                ax.plot(myVelSeries.time, result[f'{band}'][:, i], '*',
+                        color=color, markersize=12, label=f'Pt{i+1} data')
+                ax.plot(myVelSeries.time, result[f'{band}GPS'][:, i], 'o-',
+                        color=color, label=f'Pt{i+1} GPS')
+                if band != 'vv':
+                    ax.errorbar(myVelSeries.time, result[f'{band}'][:, i], 
+                                yerr=result[f'thresh{band}'][:, i])
+            # Plot labels and legends
+            ax.set_xlabel('Date', fontsize=labelFontSize)
+            ax.set_ylabel(f'{ylabels[band]} (m/yr)',
+                          fontsize=labelFontSize)
+            ax.tick_params(axis='both', labelsize=int(labelFontSize*.8))
+            if nTicks is not None:
+                ax.xaxis.set_major_locator(plt.MaxNLocator(nTicks))
+            ax.legend(ncol=3, bbox_to_anchor=(1, 1.15))
+
     def _plotDiffs(func):
         '''
         Decorator for plotting differences between tie points and
@@ -720,7 +884,7 @@ class cvPoints:
                 return
             x, y, iPts = func(inst, *args)
             dx, dy = dask.compute(inst.cvDifferences(x, y, iPts, args[0],
-                                                        date=date))[0]
+                                                     date=date))[0]
             # defaults
             for keyw, value in zip(['marker', 'linestyle'], ['.', 'None']):
                 if keyw not in kwargs:
@@ -799,9 +963,8 @@ class cvPoints:
                 print('units is not an option for this function')
                 return
             x, y, iPts = func(inst, *args)
-            print(args)
             dx, dy = dask.compute(inst.cvDifferences(x, y, iPts, args[0],
-                                                        date=date))[0]
+                                                     date=date))[0]
             # iGood = np.isfinite(dx)
             dx, dy = clipTail(dx), clipTail(dy)  # Set vals > 3sig to 3sig
             if axes is None:
@@ -852,6 +1015,51 @@ class cvPoints:
         x, y = self.xyVRange(minv, maxv)
         iPts = self.vRangeCVs(minv, maxv)
         return x, y, iPts
+
+    def timeSeriesDifferences(self, myVelSeries, minv, maxv, absError=10,
+                              percentError=0.03):
+        '''
+        Compute the difference between cal/val GPS points and data for points
+        in range specified by minv and maxv.
+
+        Parameters
+        ----------
+        myVelSeries : velSeries
+            Velocity time series.
+        minv : number
+            Only includ points >= minv.
+        maxv : number
+            Only include points <- maxv.
+        Returns
+        -------
+        result : dict
+            {'vxGPS': [], ... 'vx': [],...'dvx': []...}.
+        '''
+        dates = zip(myVelSeries.time, myVelSeries.time1, myVelSeries.time2)
+        result = {'vxGPS': [], 'vyGPS': [], 'vvGPS': [], 'vx': [],
+                  'vy': [], 'vv': [], 'dvx': [], 'dvy': [], 'dvv': [],
+                  'threshvx': [], 'threshvy': []}
+        for myDate, myDate1, myDate2 in dates:
+            # This will for set the tiepoints for the date range
+            self.velocityForDateRange(myDate1, myDate2)
+            # This will pull the coordinates for the date speed range
+            x, y = self.xyVRange(minv, maxv)
+            iPts = self.vRangeCVs(minv, maxv)
+            r = myVelSeries.interp(x, y, returnXR=True).sel(time=myDate,
+                                                            method='nearest')
+            for band in ['vx', 'vy', 'vv']:
+                result[band].append(r.sel(band=band).data)
+                result[f'{band}GPS'].append(getattr(self, band)[iPts])
+                d = r.sel(band=band).data - getattr(self, band)[iPts]
+                result[f'd{band}'].append(d)
+            # Compute thresholds for each point
+            threshX, threshY = self.computeThresh(absError=absError,
+                                                  percentError=percentError)
+            result['threshvx'].append(threshX)
+            result['threshvy'].append(threshY)
+        for key in result:
+            result[key] = np.array(result[key])
+        return result
 
     def cvDifferences(self, x, y, iPts, vel, units='m', date=None):
         '''
