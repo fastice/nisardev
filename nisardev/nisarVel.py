@@ -123,7 +123,7 @@ class nisarVel(nisarBase2D):
                             combine_attrs='drop')
         # Fix order of coordinates - force vx, vy, vv, ex...
         self._setBandOrder(
-            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4 ,'dT': 5})
+            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'dT': 5})
         #
         if 'vv' not in self.variables:
             self.variables.append('vv')
@@ -209,7 +209,7 @@ class nisarVel(nisarBase2D):
             self._addSpeed()
             self.subset = self.xr
         self._setBandOrder(
-             {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4 ,'dT': 5})
+             {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'dT': 5})
         self.subset = self.xr
         # set times
         self.time = [np.datetime64(self.xr.time.item(), 'ns')]
@@ -236,8 +236,56 @@ class nisarVel(nisarBase2D):
     # Dates routines.
     # ------------------------------------------------------------------------
 
-    def parseVelDatesFromFileName(self, fileNameBase, index1=4, index2=5,
-                                  dateFormat='%d%b%y'):
+    def _decodeProductType(self, fileNameBase):
+        '''
+        Get product type from beginning of filename ProductType_....
+        Parameters
+        ----------
+        fileNameBase : str
+            name of file.
+        Returns
+        -------
+        productType.
+
+        '''
+        validTypes = ['GL', 'TSX', 'OPT']
+        productType = fileNameBase.split('_')[0]
+        if productType in validTypes:
+            return productType
+        return None
+
+    def _getDateFormat(self, productType, index1=None, index2=None,
+                       dateFormat=None):
+        '''
+        Return parameters to decode name based on product type
+        Parameters
+        ----------
+        productType : str
+            Identifier for product type (e.g,. S1, TSX...).
+
+        Returns
+        -------
+        index1, index2, dateFormat
+        '''
+        indices = {'GL': {'index1': 4, 'index2': 5, 'dateFormat': '%d%b%y'},
+                   'TSX': {'index1': 2, 'index2': 3, 'dateFormat': '%d%b%y'},
+                   'OPT': {'index1': 2, 'index2': None, 'dateFormat': '%Y-%m'}}
+        try:
+            myIndices = indices[productType]
+        except Exception:
+            myIndices = indices['GL']
+            print(
+                f'_getDateFormat: Could not parse product type {productType}')
+            print('Defaulting to GL')
+        # allow overrides
+        for key in myIndices:
+            if locals()[key] is not None:
+                myIndices[key] = locals()[key]
+        #
+        return list(myIndices.values())
+
+    def parseVelDatesFromFileName(self, fileNameBase, index1=None, index2=None,
+                                  dateFormat=None):
         '''
         Parse the dates from the directory name the velocity products are
         stored in.
@@ -257,6 +305,12 @@ class nisarVel(nisarBase2D):
         date: mid date.
             First and last dates from meta file.
         '''
+        # formats for decoding dates from names
+        productType = self._decodeProductType(os.path.basename(fileNameBase))
+        index1, index2, dateFormat = self._getDateFormat(productType,
+                                                         index1=index1,
+                                                         index2=index2,
+                                                         dateFormat=dateFormat)
         baseNamePieces = os.path.basename(fileNameBase).split('_')
         self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
         if index2 is not None:

@@ -130,7 +130,7 @@ class nisarVelSeries(nisarBase2D):
 
     def readSeriesFromTiff(self, fileNames, useVelocity=True, useErrors=False,
                            readSpeed=False, url=False, stackVar=None,
-                           index1=4, index2=5, dateFormat='%d%b%y',
+                           index1=None, index2=None, dateFormat=None,
                            overviewLevel=None, suffix=''):
         '''
         read in a tiff product fileNameBase.*.tif. If
@@ -215,7 +215,7 @@ class nisarVelSeries(nisarBase2D):
         if 'vv' not in self.variables:
             self.variables.append('vv')
         self._mapVariables()
-        
+
     def readSeriesFromNetCDF(self, cdfFile):
         '''
         Read a cdf file previously saved by a velSeries instance.
@@ -230,7 +230,6 @@ class nisarVelSeries(nisarBase2D):
         # Read the date
         self.readFromNetCDF(cdfFile)
         # Initialize various variables.
-       
         self.nLayers = len(self.xr.time.data)
         self.variables = list(self.xr.band.data)
         if 'vv' not in self.variables and 'vx' in self.variables and \
@@ -238,11 +237,11 @@ class nisarVelSeries(nisarBase2D):
             self._addSpeedSeries()
         # fix band order
         self._setBandOrder(
-            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4 ,'dT': 5})  
+            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'dT': 5})
         self.subset = self.xr
         # get times
         self._getTimes()
-        
+
     def timeSliceVel(self, date1, date2):
         ''' Create a new velSeries for the range date1 to date2
         Parameters
