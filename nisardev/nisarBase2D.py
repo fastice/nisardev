@@ -350,7 +350,7 @@ class nisarBase2D():
         '''
         Extract a subSeries from an existing series and return a new series
         spanning date1 to date2.
-       
+
         Parameters
         ----------
         date1 : Tdatetime or "YYYY-MM-DD"
@@ -375,19 +375,18 @@ class nisarBase2D():
         newSubset.subSetData(bbox)
         # Return result
         return newSubset
-        
+
     def _getTimes(self):
-       ''' Load times from Xarray for instances that track start and times'''
-       
-       for time in ['time', 'time1', 'time2']:
-           if len(getattr(self.xr, time).data.shape) == 0:
-               setattr(self, time, 
-                       [self.datetime64ToDatetime(np.datetime64(
-                           getattr(self.xr, time).item(), 'ns'))])
-           else:
-               setattr(self, time, [self.datetime64ToDatetime(x)
-                                    for x in getattr(self.xr, time).data] )  
-               
+        ''' Load times from Xarray for instances that track start and times'''
+        for time in ['time', 'time1', 'time2']:
+            if len(getattr(self.xr, time).data.shape) == 0:
+                setattr(self, time,
+                        [self.datetime64ToDatetime(np.datetime64(
+                            getattr(self.xr, time).item(), 'ns'))])
+            else:
+                setattr(self, time, [self.datetime64ToDatetime(x)
+                                     for x in getattr(self.xr, time).data])
+
     def _setBandOrder(self, bandOrder):
         '''
         Ensure band order is correct
@@ -400,7 +399,7 @@ class nisarBase2D():
         for b in self.xr.band:
             bandOrderList.append(bandOrder[b.item()])
         # creete array for sort
-        myOrderXR = xr.DataArray(bandOrderList, coords=[self.xr['band']], 
+        myOrderXR = xr.DataArray(bandOrderList, coords=[self.xr['band']],
                                  dims='band')
         # do sort
         self.xr = self.xr.sortby(myOrderXR)
@@ -990,8 +989,8 @@ class nisarBase2D():
         # Display the data
         displayVar = np.squeeze(displayVar)
         if wrap is not None:
-            displayVar  = np.mod(displayVar, wrap)
-        
+            displayVar = np.mod(displayVar, wrap)
+
         pos = ax.imshow(np.ma.masked_where(displayVar == masked, displayVar,
                                            copy=True), norm=norm, cmap=cmap,
                         extent=self.extent(units=units), **kwargs)

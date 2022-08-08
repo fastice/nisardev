@@ -123,7 +123,7 @@ class nisarVel(nisarBase2D):
                             combine_attrs='drop')
         # Fix order of coordinates - force vx, vy, vv, ex...
         self._setBandOrder(
-            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4 ,'dT': 5})  
+            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4 ,'dT': 5})
         #
         if 'vv' not in self.variables:
             self.variables.append('vv')
@@ -209,7 +209,7 @@ class nisarVel(nisarBase2D):
             self._addSpeed()
             self.subset = self.xr
         self._setBandOrder(
-             {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4 ,'dT': 5})  
+             {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4 ,'dT': 5})
         self.subset = self.xr
         # set times
         self.time = [np.datetime64(self.xr.time.item(), 'ns')]
@@ -262,9 +262,9 @@ class nisarVel(nisarBase2D):
         if index2 is not None:
             self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
         else:
-           # assume monthly
-           tmp = self.date1 + timedelta(days=32)
-           self.date2 = tmp - timedelta(days=tmp.day)    
+            # assume monthly
+            tmp = self.date1 + timedelta(days=32)
+            self.date2 = tmp - timedelta(days=tmp.day)
         self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
         #
         return self.midDate
