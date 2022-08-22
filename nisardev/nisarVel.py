@@ -248,7 +248,7 @@ class nisarVel(nisarBase2D):
         productType.
 
         '''
-        validTypes = ['GL', 'TSX', 'OPT']
+        validTypes = ['GL', 'TSX', 'OPT', 'CSK']
         productType = fileNameBase.split('_')[0]
         if productType in validTypes:
             return productType
@@ -269,6 +269,7 @@ class nisarVel(nisarBase2D):
         '''
         indices = {'GL': {'index1': 4, 'index2': 5, 'dateFormat': '%d%b%y'},
                    'TSX': {'index1': 2, 'index2': 3, 'dateFormat': '%d%b%y'},
+                   'CSK': {'index1': 2, 'index2': 3, 'dateFormat': '%d%b%y'},
                    'OPT': {'index1': 2, 'index2': None, 'dateFormat': '%Y-%m'}}
         try:
             myIndices = indices[productType]
@@ -332,7 +333,8 @@ class nisarVel(nisarBase2D):
                    titleFontSize=titleFontSize,
                    labelFontSize=labelFontSize,  colorBar=True,
                    scale='linear', axisOff=False, midDate=True,
-                   vmin=0, vmax=7000, percentile=100, wrap=None, **kwargs):
+                   vmin=0, vmax=7000, percentile=100, wrap=None, extend=None,
+                   **kwargs):
         '''
         Use matplotlib to show velocity in a single subplot with a color
         bar. Clip to absolute max set by maxv, though in practives percentile
@@ -373,13 +375,15 @@ class nisarVel(nisarBase2D):
             vmin, vmax = self.autoScaleRange(band, None, vmin, vmax,
                                              percentile)
         elif scale == 'log':
-            vmin = max(.1, vmin)  # Don't allow to small a value
+            vmin = max(.1, vmin)  # Don't allow too small a value
         else:
             print('Invalid scale option, use linear or log')
             return
         # Display data
-        self.displayVar(band, ax=ax, plotFontSize=self.plotFontSize,
-                        labelFontSize=self.labelFontSize, midDate=midDate,
-                        colorBarLabel='Speed (m/yr)', vmax=vmax, vmin=vmin,
-                        axisOff=axisOff, colorBar=colorBar,
-                        scale=scale, wrap=wrap, **kwargs)
+        return self.displayVar(band, ax=ax, plotFontSize=self.plotFontSize,
+                               labelFontSize=self.labelFontSize,
+                               midDate=midDate,
+                               colorBarLabel='Speed (m/yr)',
+                               vmax=vmax, vmin=vmin,
+                               axisOff=axisOff, colorBar=colorBar,
+                               scale=scale, wrap=wrap, **kwargs)

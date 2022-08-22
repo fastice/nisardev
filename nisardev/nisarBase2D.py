@@ -864,9 +864,10 @@ class nisarBase2D():
         if scale == 'log':
             norm = colors.LogNorm(vmin=vmin, vmax=vmax)
             # Default color map for log is truncated hsv
-            if cmap is None:
-                cmap = colors.LinearSegmentedColormap.from_list(
-                    'myMap', cm.hsv(np.linspace(0.1, 1, 250)))
+            if cmap is None or cmap == 'hsv':
+                cmap = self.logHSVColorMap()
+                # cmap = colors.LinearSegmentedColormap.from_list(
+                #    'myMap', cm.hsv(np.linspace(0.1, 1, 250)))
             return norm, cmap
         # Pass back colormap for linear case
         elif scale == 'linear':
@@ -920,7 +921,7 @@ class nisarBase2D():
                                    pad=colorBarPad)
 
     def _colorBar(self, pos, ax, colorBarLabel, colorBarPosition, colorBarSize,
-                  colorBarPad, labelFontSize, plotFontSize):
+                  colorBarPad, labelFontSize, plotFontSize, extend='max'):
         '''
         Color bar for image
         '''
@@ -933,7 +934,8 @@ class nisarBase2D():
                        'top': 'horizontal',
                        'bottom': 'horizontal'}[colorBarPosition]
 
-        cb = plt.colorbar(pos, cax=cbAx, orientation=orientation, extend='max')
+        cb = plt.colorbar(pos, cax=cbAx, orientation=orientation,
+                          extend=extend)
         cb.set_label(colorBarLabel, size=labelFontSize)
         cb.ax.tick_params(labelsize=plotFontSize)
         if colorBarPosition in ['right', 'left']:
@@ -942,6 +944,55 @@ class nisarBase2D():
         elif colorBarPosition in ['top', 'tottom']:
             cbAx.xaxis.set_ticks_position(colorBarPosition)
             cbAx.xaxis.set_label_position(colorBarPosition)
+      
+    def hsvSpeedRender(self, speed, vmin=1, vmax=3000):
+        '''
+        Convert speed to rgb version of hsv rendering of image.
+
+        Parameters
+        ----------
+        speed : np array
+            Speed to be rendered, which will be clipped to (vmin, vmax)
+        vmin : float, optional
+            Minimum speed to clip to. The default is 1.
+        vmax : float, optional
+            Maximum speed to clip to. The default is 3000.
+        Returns
+        -------
+        rgb image.
+        '''
+        print(speed.shape)
+        background = np.isnan(speed)
+        print(type(background))
+        # Uniform value
+        value = np.full(speed.shape, 1)
+        # Reduce saturation on low end
+        saturation = np.clip((speed/125 + .5)/1.5, 0, 1)
+        # Force background to white
+        print(speed.shape, saturation.shape)
+        saturation[background] = 0
+        hue = np.log10(np.clip(speed, vmin, vmax)) / \
+            (np.log10(vmax) - np.log(vmin))
+        # order axes so rgb bands indexed last for imshow
+        hsv = np.moveaxis(np.array([hue, saturation, value]), 0, 2)
+        return colors.hsv_to_rgb(hsv)
+
+    def logHSVColorMap(self, vmin=1, vmax=3000, ncolors=1024):
+        ''' Create a log color map for displaying velocity'''
+        # value
+        value = np.full((ncolors), 1)
+        # Compute values of log scale
+        dv = (np.log10(vmax) - np.log10(vmin))/ncolors
+        vrange = np.power(10., np.arange(0, ncolors) * dv)
+        # Provides nice map
+        saturation = np.clip((vrange/125 + .5)/1.5, 0, 1)
+        # Use linear scale - norm will be used for log scale
+        hue = np.arange(0, 1, 1/ncolors)
+        # hsv to rgb
+        hsv = np.array([hue, saturation, value]).transpose()
+        rgb = colors.hsv_to_rgb(hsv)
+        # return color map
+        return colors.LinearSegmentedColormap.from_list('my', rgb, N=ncolors)
 
     def displayVar(self, var, date=None, ax=None, plotFontSize=14,
                    colorBar=True,
@@ -949,7 +1000,7 @@ class nisarBase2D():
                    vmin=0, vmax=7000, units='m', scale='linear', cmap=None,
                    title=None, midDate=True, colorBarLabel='Speed (m/yr)',
                    masked=None, colorBarPosition='right', colorBarSize='5%',
-                   colorBarPad=0.05, wrap=None,
+                   colorBarPad=0.05, wrap=None, extend=None,
                    **kwargs):
         '''
         Use matplotlib to show velocity in a single subplot with a color
@@ -988,9 +1039,18 @@ class nisarBase2D():
         displayVar = displayVar.sel(time=date, method='nearest')
         # Display the data
         displayVar = np.squeeze(displayVar)
+        # Wrap data
         if wrap is not None:
             displayVar = np.mod(displayVar, wrap)
-
+        # Set default extend based on scale type
+        if extend is None:
+            try:
+                extend = {'log': 'both', 'linear': 'max'}[scale]
+            except Exception:
+                print('Could not set extend for colorbar using scale={scale}')
+        # 
+        if cmap == 'log':
+            displayVar = self.hsvSpeedRender(displayVar.data)
         pos = ax.imshow(np.ma.masked_where(displayVar == masked, displayVar,
                                            copy=True), norm=norm, cmap=cmap,
                         extent=self.extent(units=units), **kwargs)
@@ -1014,9 +1074,9 @@ class nisarBase2D():
         if colorBar:
             self._colorBar(pos, ax, colorBarLabel, colorBarPosition,
                            colorBarSize, colorBarPad, labelFontSize,
-                           plotFontSize)
+                           plotFontSize, extend=extend)
 
-        return ax
+        return pos
 
     #
     # ---- Return  geometry params in m and km

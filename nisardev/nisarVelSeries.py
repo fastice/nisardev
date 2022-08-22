@@ -336,12 +336,14 @@ class nisarVelSeries(nisarBase2D):
             print('Invalid scale option, use linear or log')
             return
         # Create plot
-        self.displayVar(band, date=date, ax=ax, plotFontSize=plotFontSize,
-                        labelFontSize=labelFontSize,
-                        titleFontSize=titleFontSize,
-                        axisOff=axisOff, colorBar=colorBar,
-                        colorBarLabel=colorBarLabel, vmax=vmax, vmin=vmin,
-                        scale=scale, wrap=wrap, **kwargs)
+        return self.displayVar(band, date=date, ax=ax,
+                               plotFontSize=plotFontSize,
+                               labelFontSize=labelFontSize,
+                               titleFontSize=titleFontSize,
+                               axisOff=axisOff, colorBar=colorBar,
+                               colorBarLabel=colorBarLabel,
+                               vmax=vmax, vmin=vmin,
+                               scale=scale, wrap=wrap, **kwargs)
 
     @classmethod
     def reproduce(cls):
