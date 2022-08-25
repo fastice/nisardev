@@ -847,7 +847,7 @@ class nisarBase2D():
     # ---- Plotting and display
     #
 
-    def colorSetup(self, scale, cmap, vmin, vmax):
+    def colorSetup(self, scale, cmap, vmin, vmax, backgroundColor=(1, 1, 1)):
         '''
         Set up normalization and color table for imshow
         Parameters
@@ -868,9 +868,11 @@ class nisarBase2D():
                 cmap = self.logHSVColorMap()
                 # cmap = colors.LinearSegmentedColormap.from_list(
                 #    'myMap', cm.hsv(np.linspace(0.1, 1, 250)))
+                cmap.set_bad(color=backgroundColor)
             return norm, cmap
         # Pass back colormap for linear case
         elif scale == 'linear':
+            cmap.set_bad(color=backgroundColor)
             return colors.Normalize(vmin=vmin, vmax=vmax), cmap
         print('Invalid scale mode. Choices are "linear" and "log"')
 
@@ -1001,6 +1003,7 @@ class nisarBase2D():
                    title=None, midDate=True, colorBarLabel='Speed (m/yr)',
                    masked=None, colorBarPosition='right', colorBarSize='5%',
                    colorBarPad=0.05, wrap=None, extend=None,
+                   backgroundColor=(1, 1, 1),
                    **kwargs):
         '''
         Use matplotlib to show velocity in a single subplot with a color
@@ -1027,7 +1030,8 @@ class nisarBase2D():
             sx, sy = self.sizeInPixels()
             fig, ax = plt.subplots(1, 1, constrained_layout=True,
                                    figsize=(10.*float(sx)/float(sy), 10.))
-        norm, cmap = self.colorSetup(scale, cmap, vmin, vmax)
+        norm, cmap = self.colorSetup(scale, cmap, vmin, vmax,
+                                     backgroundColor=backgroundColor)
         # Return if invalid var
         if var not in self.variables:
             print(f'{var} is not a valid, the choices are {self.variables}')
