@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "nisardev"
-version = "0.0.5"
+version = "0.0.6"
 description = "SAR processing on the Cloud"
 authors = ["Ian Joughin <ian@apl.washington.edu>"]
 license = "MIT"
