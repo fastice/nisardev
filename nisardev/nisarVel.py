@@ -132,7 +132,8 @@ class nisarVel(nisarBase2D):
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
                          readSpeed=False, url=False, stackVar=None,
                          index1=4, index2=5, dateFormat='%d%b%y',
-                         overviewLevel=None, masked=True, suffix=''):
+                         overviewLevel=None, masked=True, suffix='',
+                         date1=None, date2=None):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -164,12 +165,17 @@ class nisarVel(nisarBase2D):
         overviewLevel: int
             Overview (pyramid) level to read: None->full res, 0->1/2 res,
             1->1/4 res....to image dependent max downsampling level
+        date1 : datetime
+            First date. The defaults is None (extract from filename)
+        date2 : datetime
+            Second date. The defaults is None (extract from filename)
         Returns
         -------
         None.
         '''
         self.parseVelDatesFromFileName(fileNameBase, index1=index1,
-                                       index2=index2, dateFormat=dateFormat)
+                                       index2=index2, dateFormat=dateFormat,
+                                       date1=date1, date2=date2)
         self.variables = self.myVariables(useVelocity, useErrors, readSpeed)
         if readSpeed:
             skip = []
@@ -286,7 +292,7 @@ class nisarVel(nisarBase2D):
         return list(myIndices.values())
 
     def parseVelDatesFromFileName(self, fileNameBase, index1=None, index2=None,
-                                  dateFormat=None):
+                                  dateFormat=None, date1=None, date2=None):
         '''
         Parse the dates from the directory name the velocity products are
         stored in.
@@ -307,21 +313,30 @@ class nisarVel(nisarBase2D):
             First and last dates from meta file.
         '''
         # formats for decoding dates from names
-        productType = self._decodeProductType(os.path.basename(fileNameBase))
-        index1, index2, dateFormat = self._getDateFormat(productType,
-                                                         index1=index1,
-                                                         index2=index2,
-                                                         dateFormat=dateFormat)
-        baseNamePieces = os.path.basename(fileNameBase).split('_')
-        self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
-        if index2 is not None:
-            self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
+        if date1 is None:
+            productType = \
+                self._decodeProductType(os.path.basename(fileNameBase))
+            index1, index2, dateFormat = \
+                self._getDateFormat(productType,
+                                    index1=index1,
+                                    index2=index2,
+                                    dateFormat=dateFormat)
+            baseNamePieces = os.path.basename(fileNameBase).split('_')
+            self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
+        else:
+            self.date1 = date1
+        if date2 is None and index2 is not None:
+            if index2 is not None:
+                self.date2 = datetime.strptime(baseNamePieces[index2],
+                                               dateFormat)
         else:
             # assume monthly
             tmp = self.date1 + timedelta(days=32)
             self.date2 = tmp - timedelta(days=tmp.day)
         self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
         #
+        self.time1 = self.date1
+        self.time2 = self.date2
         return self.midDate
 
     # ------------------------------------------------------------------------

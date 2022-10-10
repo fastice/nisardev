@@ -359,7 +359,7 @@ class cvPoints:
     #
 
     def computeThreshMean(self, iPts, iGood, absError=1,
-                      percentError=0.03):
+                          percentError=0.03):
         threshX = np.sqrt(np.mean(
             (np.ones(iGood.shape)[iGood] * absError)**2 +
             (self.vx[iPts][iGood] * percentError)**2))
@@ -367,12 +367,12 @@ class cvPoints:
             (np.ones(iGood.shape)[iGood] * absError)**2 +
             (self.vy[iPts][iGood] * percentError)**2))
         return threshX, threshY
-    
+
     def computeThresh(self, absError=1, percentError=0.03):
-        threshX = np.sqrt( absError**2 + (self.vx * percentError)**2)
-        threshY = np.sqrt( absError**2 + (self.vy * percentError)**2)
+        threshX = np.sqrt(absError**2 + (self.vx * percentError)**2)
+        threshY = np.sqrt(absError**2 + (self.vy * percentError)**2)
         return threshX, threshY
-    
+
     def _stats(func):
         ''' decorator for computing stats routines '''
         # create a table
@@ -410,10 +410,11 @@ class cvPoints:
             dvx = dvx[iGood]
             dvy = dvy[iGood]
             #
-            #print(args[0].vx.shape, iPts.shape, iGood.shape)
-            threshX, threshY = args[0].computeThreshMean(iPts, iGood,
-                                                     absError=absError,
-                                                     percentError=percentError)
+            # print(args[0].vx.shape, iPts.shape, iGood.shape)
+            threshX, threshY = \
+                args[0].computeThreshMean(iPts, iGood,
+                                          absError=absError,
+                                          percentError=percentError)
             muX, muY = np.average(dvx), np.average(dvy)
             rmsX = np.sqrt(np.average(dvx**2))
             rmsY = np.sqrt(np.average(dvy**2))
@@ -425,11 +426,7 @@ class cvPoints:
                                    sum(iGood), threshX, threshY, date1, date2)
         return mstd
 
-    @_stats
-    def vRangeStats(self, vel, minv, maxv, date=None):
-        ''' get stats for cvpoints in range (minv,maxv) '''
-        x, y = self.xyVRange(minv, maxv, units='m')
-        iPts = self.vRangeCVs(minv, maxv)
+    def _processVelDate(self, date, vel):
         if date is None or len(vel.subset.time1.shape) == 0:
             if type(vel.time1) == list:
                 date1 = vel.time1[0]
@@ -444,6 +441,25 @@ class cvPoints:
             date2 = vel.datetime64ToDatetime(
                     vel.subset.time2.sel(time=vel.parseDate(date),
                                          method='nearest').data)
+        return date1, date2
+
+    @_stats
+    def vRangeStats(self, vel, minv, maxv, date=None, units='m'):
+        ''' get stats for cvpoints in range (minv,maxv) '''
+        x, y = self.xyVRange(minv, maxv, units=units)
+        iPts = self.vRangeCVs(minv, maxv)
+        date1, date2 = self._processVelDate(date, vel)
+        return x, y, iPts, date1, date2
+
+    @_stats
+    def noCullStats(self, vel, units='m', date=None):
+        ''' get stats for cvpoints in range (minv,maxv) '''
+        x, y = self.xyNoCull(units=units)
+        if self.nocull is None:
+            iPts = np.full(x.shape, True)
+        else:
+            iPts = self.nocull
+        date1, date2 = self._processVelDate(date, vel)
         return x, y, iPts, date1, date2
 
     def timeSeriesStats(self, myVelSeries, minv, maxv):
@@ -477,23 +493,23 @@ class cvPoints:
                                                  [sigmaX, sigmaY],
                                                  [threshX, threshY],
                                                  ['vx', 'vy']):
-                mean[pt] = np.nanmean(result[f'd{band}'][:, pt])    
+                mean[pt] = np.nanmean(result[f'd{band}'][:, pt])
                 sigma[pt] = np.nanstd(result[f'd{band}'][:, pt])
                 thresh[pt] = np.sqrt(np.mean(
                     result[f'thresh{band}'][:, pt]**2))
             #
             nGood[pt] = int(np.sum(np.isfinite(result['vx'][:, pt])))
-        
+
         rmsX = np.sqrt(meanX**2 + sigmaX**2)
-        rmsY = np.sqrt(meanY**2 + sigmaY**2)    
+        rmsY = np.sqrt(meanY**2 + sigmaY**2)
         summaryStats = np.array([meanX, meanY, sigmaX, sigmaY,
                                  rmsX, rmsY]).transpose()
-        
+
         dfData = pd.DataFrame(summaryStats,
                               columns=pd.MultiIndex.from_product(
                               [['Mean', 'Sigma', 'RMS'],
                                ['$$v_x-u_x$$', '$$v_y-u_y$$']]),
-                              index=range(1,nPts+1))   
+                              index=range(1,nPts+1))
         dfPoints = pd.DataFrame(nGood,
                                 columns=pd.MultiIndex.from_product(
                                     [['Count'], ['n']]),
@@ -504,7 +520,7 @@ class cvPoints:
                                 index=range(1,nPts+1))
         df = pd.concat([dfData, dfPoints, dfThresh], axis=1)
         summary['nPassed'] = (
-            (df["RMS"]['$$v_x-u_x$$'] <  df["Threshold"]['x']).sum() + 
+            (df["RMS"]['$$v_x-u_x$$'] <  df["Threshold"]['x']).sum() +
             (df["RMS"]['$$v_y-u_y$$'] < df["Threshold"]['y']).sum())
         summary['nGoodPoints'] = nGood.sum()
         summary['totalPoints'] = \
@@ -647,6 +663,24 @@ class cvPoints:
             return self._toKM(self.x, self.y)
         return self.x, self.y
 
+    def xyNoCull(self, units='m'):
+        '''
+        Return x and y (m) coordinates of all CVs.
+        Returns
+        -------
+        x,y  : nparray
+           x and y in m of all CVs.
+        '''
+        if not self._checkUnits(units):
+            return None, None
+        # If no culling, return all
+        if self.nocull is None:
+            return self.xyAll(units=units)
+        #
+        if units == 'km':
+            return self._toKM(self.x[self.nocull], self.y[self.nocull])
+        return self.x[self.nocull], self.y[self.nocull]
+
     def xyVRange(self, minv, maxv, units='m'):
         '''
         Return x and y (m) coordinates for pts with speed in range (minv,maxv).
@@ -744,7 +778,7 @@ class cvPoints:
             return None, None
         x, y = self.xyVRange(minv, maxv, units=units)  # get points in range
         # Just points in range (minv,vmaxv)
-        iPts = self.vRangeCVs(minv, maxv, units=units)
+        iPts = self.vRangeCVs(minv, maxv)
         dvx, dvy = self.cvDifferences(x, y, iPts, vel, units=units)
         # Compute valid points and reduce all variables to good points
         iGood = np.isfinite(dvx)
@@ -798,7 +832,7 @@ class cvPoints:
         while len(colors) < nColors:
             colors += mcolors.TABLEAU_COLORS.values()
         return colors
-    
+
 
 
     def plotTimesSeriesData(self, myVelSeries, minv, maxv,
@@ -849,7 +883,7 @@ class cvPoints:
                 ax.plot(myVelSeries.time, result[f'{band}GPS'][:, i], 'o-',
                         color=color, label=f'Pt{i+1} GPS')
                 if band != 'vv':
-                    ax.errorbar(myVelSeries.time, result[f'{band}'][:, i], 
+                    ax.errorbar(myVelSeries.time, result[f'{band}'][:, i],
                                 yerr=result[f'thresh{band}'][:, i])
             # Plot labels and legends
             ax.set_xlabel('Date', fontsize=labelFontSize)

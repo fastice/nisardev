@@ -866,12 +866,11 @@ class nisarBase2D():
             # Default color map for log is truncated hsv
             if cmap is None or cmap == 'hsv':
                 cmap = self.logHSVColorMap()
-                # cmap = colors.LinearSegmentedColormap.from_list(
-                #    'myMap', cm.hsv(np.linspace(0.1, 1, 250)))
                 cmap.set_bad(color=backgroundColor)
             return norm, cmap
         # Pass back colormap for linear case
         elif scale == 'linear':
+            cmap = plt.cm.get_cmap(cmap)
             cmap.set_bad(color=backgroundColor)
             return colors.Normalize(vmin=vmin, vmax=vmax), cmap
         print('Invalid scale mode. Choices are "linear" and "log"')
