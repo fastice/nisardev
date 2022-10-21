@@ -277,13 +277,18 @@ class nisarVel(nisarBase2D):
                    'TSX': {'index1': 2, 'index2': 3, 'dateFormat': '%d%b%y'},
                    'CSK': {'index1': 2, 'index2': 3, 'dateFormat': '%d%b%y'},
                    'OPT': {'index1': 2, 'index2': None, 'dateFormat': '%Y-%m'}}
-        try:
-            myIndices = indices[productType]
-        except Exception:
-            myIndices = indices['GL']
-            print(
-                f'_getDateFormat: Could not parse product type {productType}')
-            print('Defaulting to GL')
+        # get defaults
+        if productType is not None:
+            try:
+                myIndices = indices[productType]
+            except Exception:
+                myIndices = indices['GL']
+                print('_getDateFormat: '
+                      'Could not parse product type {productType}')
+                print('Defaulting to GL')
+        else:
+            # default if no defined product type
+            myIndices = {'index1': 4, 'index2': 5, 'dateFormat': '%d%b%y'}
         # allow overrides
         for key in myIndices:
             if locals()[key] is not None:
