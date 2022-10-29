@@ -130,10 +130,10 @@ class nisarVel(nisarBase2D):
         self._mapVariables()
 
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
-                         readSpeed=False, url=False, stackVar=None,
+                         readSpeed=False, url=False, useStack=True,
                          index1=4, index2=5, dateFormat='%d%b%y',
-                         overviewLevel=None, masked=True, suffix='',
-                         date1=None, date2=None):
+                         overviewLevel=-1, masked=True, suffix='',
+                         date1=None, date2=None, chunkSize=1024):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -158,17 +158,20 @@ class nisarVel(nisarBase2D):
             Read speed (.vv) if True. The default is False.
         url : bool, optional
             Read data from url
-        stacVar : diction, optional
-            for stackstac {'bounds': [], 'resolution': res, 'epsg': epsg}
+        useStack : boolean, optional
+            Uses stackstac for full resolution data. The default is True.
         index1, index2 : location of dates in filename with seperated by _
-        dateFormat : format code to strptime
-        overviewLevel: int
+            dateFormat : format code to strptime
+        overviewLevel: int, optional
             Overview (pyramid) level to read: None->full res, 0->1/2 res,
-            1->1/4 res....to image dependent max downsampling level
+            1->1/4 res....to image dependent max downsampling level.
+            The default is -1 (full res).
         date1 : datetime
             First date. The defaults is None (extract from filename)
         date2 : datetime
             Second date. The defaults is None (extract from filename)
+        chunkSize : int, optional
+            Chunksize for xarray. Default is 1024.
         Returns
         -------
         None.
@@ -181,10 +184,10 @@ class nisarVel(nisarBase2D):
             skip = []
         else:
             skip = ['vv']  # Force skip
-        self.readXR(fileNameBase, url=url, masked=True, stackVar=stackVar,
+        self.readXR(fileNameBase, url=url, masked=True, useStack=useStack,
                     time=self.midDate, skip=skip, time1=self.date1,
                     time2=self.date2, overviewLevel=overviewLevel,
-                    suffix=suffix)
+                    suffix=suffix, chunkSize=chunkSize)
         # compute speed rather than download
         if not readSpeed and useVelocity:
             self._addSpeed()
@@ -192,6 +195,7 @@ class nisarVel(nisarBase2D):
         self.xr = self.xr.rename('VelocityMap')
         self.fileNameBase = fileNameBase  # save filenameBase
         # force intial subset to entire image
+        # print(self.boundingBox(units='m'))
         self.subSetData(self.boundingBox(units='m'))
 
     def readDataFromNetCDF(self, cdfFile):
@@ -407,3 +411,172 @@ class nisarVel(nisarBase2D):
                                vmax=vmax, vmin=vmin,
                                axisOff=axisOff, colorBar=colorBar,
                                scale=scale, wrap=wrap, **kwargs)
+
+    def plotPoint(self, x, y, *args, band='vv', ax=None, **kwargs):
+        '''
+        Interpolate data set at point x, y, and plot result vs time
+
+        Parameters
+        ----------
+        x : float
+            x-coordinate.
+        y : float
+            y-coordinate.
+
+        *argv : list
+            Additional args to pass to plt.plot (e.g. 'r*').
+        band : str, optional
+            band name (vx, vy, vv). The default is 'vv'.
+        ax : axis, optional
+            matplotlib axes. The default is None.
+        **kwargs : dict
+            kwargs pass through to plt.plot.
+
+        Returns
+        -------
+        ax.
+
+        '''
+        ax = self._plotPoint(x, y, band, *args, ax=ax, **kwargs)
+        return ax
+
+    def plotProfile(self, x, y, *argv, band='vv', ax=None,
+                    midDate=True, distance=None, units='m', **kwargs):
+        '''
+        Interpolate data for profile x, y and plot as a function of distance
+
+        Parameters
+        ----------
+        x : float
+            x-coordinate.
+        y : float
+            y-coordinate.
+
+        *argv : list
+            Additional args to pass to plt.plot (e.g. 'r*').
+        band : str, optional
+            band name (vx, vy, vv). The default is 'vv'.
+        ax : axis, optional
+            matplotlib axes. The default is None.
+        distance : nparray, optional
+            distance variable for plot.
+            The default is None, which causes it to be calculated.
+        **kwargs : dict
+            kwargs pass through to plt.plot.
+
+        Returns
+        -------
+        ax.
+        '''
+        ax = self._plotProfile(x, y, band, *argv, date=None, ax=ax,
+                               midDate=midDate, distance=distance, units=units,
+                               **kwargs)
+        return ax
+
+    def labelProfilePlot(self, ax, band='vv',
+                         xLabel=None, yLabel=None,
+                         units='m',
+                         title=None,
+                         labelFontSize=15, titleFontSize=16, plotFontSize=13,
+                         fontScale=1, axisOff=False):
+        '''
+        Label a profile plot
+
+        Parameters
+        ----------
+        ax : axis
+            matplotlib axes. The default is None.
+        band : str, optional
+            band name (vx, vy, vv). The default is 'vv'.
+        xLabel : tr, optional
+            x-axis label. The default is 'Distance', use '' to disable.
+        yLabel : tr, optional
+            x-axis label. The default is band appropriate (e.g, Speed),
+            use '' to disable.
+        units : str, optional
+            Units (m or km) for the x, y coordinates. The default is 'm'
+        title : str, optional
+            Plot titel. The default is None.
+        labelFontSize : int, optional
+            Font size for x&y labels. The default is 15.
+        titleFontSize : int, optional
+            Fontsize for plot title The default is 16.
+        plotFontSize : int, optional
+            Font size for tick labels. The default is 13.
+        fontScale : float, optional
+            Scale factor to apply to label, title, and plot fontsizes.
+            The default is 1.
+        axisOff : Boolean, optional
+            Set to True to turn axis off. The default is False.
+
+        Returns
+        -------
+        None.
+
+        '''
+        speedLabels = {'vv': 'Speed', 'vx': '$v_x$', 'vy': '$v_y$'}
+        if xLabel is None:
+            xLabel = f'Distance ({units})'
+        if yLabel is None:
+            yLabel = speedLabels[band] + ' (m/yr)'
+        #
+        self._labelAxes(ax, xLabel, yLabel,
+                        labelFontSize=labelFontSize,
+                        titleFontSize=titleFontSize,
+                        plotFontSize=plotFontSize,
+                        fontScale=fontScale,
+                        axisOff=axisOff, title=title)
+
+    def labelPointPlot(self, ax, band='vv',
+                       xLabel=None, yLabel=None,
+                       units='m',
+                       title=None,
+                       labelFontSize=15, titleFontSize=16, plotFontSize=13,
+                       fontScale=1, axisOff=False):
+        '''
+        Label a profile plot
+
+        Parameters
+        ----------
+        ax : axis
+            matplotlib axes. The default is None.
+        band : str, optional
+            band name (vx, vy, vv). The default is 'vv'.
+        xLabel : tr, optional
+            x-axis label. The default is 'Distance', use '' to disable.
+        yLabel : tr, optional
+            x-axis label. The default is band appropriate (e.g, Speed),
+            use '' to disable.
+        units : str, optional
+            Units (m or km) for the x, y coordinates. The default is 'm'
+        title : str, optional
+            Plot title. The default is None.
+        labelFontSize : int, optional
+            Font size for x&y labels. The default is 15.
+        titleFontSize : int, optional
+            Fontsize for plot title The default is 16.
+        plotFontSize : int, optional
+            Font size for tick labels. The default is 13.
+        fontScale : float, optional
+            Scale factor to apply to label, title, and plot fontsizes.
+            The default is 1.
+        axisOff : Boolean, optional
+            Set to True to turn axis off. The default is False.
+
+        Returns
+        -------
+        None.
+
+        '''
+        speedLabels = {'vv': 'Speed', 'vx': '$v_x$', 'vy': '$v_y$'}
+        if xLabel is None:
+            xLabel = 'Date'
+        if yLabel is None:
+            yLabel = speedLabels[band] + ' (m/yr)'
+        #
+        self._labelAxes(ax, xLabel, yLabel,
+                        labelFontSize=labelFontSize,
+                        titleFontSize=titleFontSize,
+                        plotFontSize=plotFontSize,
+                        fontScale=fontScale,
+                        axisOff=axisOff, title=title)

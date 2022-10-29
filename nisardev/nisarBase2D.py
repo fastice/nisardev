@@ -20,11 +20,15 @@ from matplotlib import cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib import colors
 from datetime import datetime
+import rio_stac
+import pystac
+from copy import deepcopy
 # from dask.diagnostics import ProgressBar
 import math
 
-CHUNKSIZE = 512
+#CHUNKSIZE = 1024
 
+overviewLevels = dict(zip(range(-1, 10), 2**np.arange(0,11)))
 
 class nisarBase2D():
     ''' Abstract class to define xy polar stereo (3031, 3413) image objects
@@ -37,7 +41,7 @@ class nisarBase2D():
     __metaclass__ = ABCMeta
 
     def __init__(self,  sx=None, sy=None, x0=None, y0=None, dx=None, dy=None,
-                 verbose=True, epsg=None, numWorkers=4):
+                 verbose=True, epsg=None, numWorkers=4, stackTemplate=None):
         ''' initialize a nisar velocity object'''
         self.sx, self.sy = sx, sy  # Image size in pixels
         self.x0, self.y0 = x0, y0  # Origin (center of lower left pixel) in m
@@ -53,11 +57,22 @@ class nisarBase2D():
         self.dtype = 'float32'
         self.useStackstac = False
         self.xforms = {}  # Cached pyproj transforms
+        self.stackTemplate = stackTemplate
         dask.config.set(num_workers=numWorkers)
 
     #
     # ---- Setup abtract methods for child classes
     #
+
+    @abstractmethod
+    def plotPoint():
+        ''' Abstract interpolation method - define in child class. '''
+        pass
+
+    @abstractmethod
+    def plotProfile():
+        ''' Abstract interpolation method - define in child class. '''
+        pass
 
     @abstractmethod
     def interp():
@@ -83,9 +98,9 @@ class nisarBase2D():
     # ---- Input and array creation
     #
 
-    def readXR(self, fileNameBase, url=False, masked=False, stackVar=None,
+    def readXR(self, fileNameBase, url=False, masked=False, useStack=False,
                time=None, time1=None, time2=None, xrName='None', skip=[],
-               overviewLevel=None, suffix=''):
+               overviewLevel=-1, suffix='', chunkSize=1024, fill_value=np.nan):
         ''' Use read data into rioxarray variable
         Parameters
         ----------
@@ -94,6 +109,10 @@ class nisarBase2D():
             the * will be replaced with the different compnents (e.g., vx,vy)
         url bool, optional
             Set true if fileNameBase is a link
+        masked : boolean, optional.
+            Masked keyword to lazy_open_tiff. The default is False
+        useStack : boolean, optional
+            Uses stackstac for full resolution data. The default is True.
         time : datetime, optional
             nominal center. The default is None.
         time1 : TYPE, optional
@@ -103,27 +122,35 @@ class nisarBase2D():
         xrName : str, optional
             Name for xarray. The default is None
         overviewLevel: int
-            Overview (pyramid) level to read: None->full res, 0->1/2 res,
-            1->1/4 res....to image dependent max downsampling level
+            Overview (pyramid) level to read: -1->full res, 0->1/2 res,
+            1->1/4 res....to image dependent max downsampling level.
+            The default is -1 (full res)
         suffix : str, optional
             Any suffix that needs to be appended (e.g., for dropbox links)
         '''
         # Do a lazy open on the tiffs
-        if stackVar is None:
+        # For now useStack turned off since it tries to read the full res
+        # data and donwsample instead of the pyramid
+        if not useStack or overviewLevel > -1:
+            # print('noStack')
             myXR = self._lazy_openTiff(fileNameBase, url=url, masked=masked,
                                        time=time, xrName=xrName, skip=skip,
                                        overviewLevel=overviewLevel,
-                                       suffix=suffix)
+                                       suffix=suffix, chunkSize=chunkSize)
         else:  # Not debugged
-            items = self._construct_stac_items(fileNameBase, stackVar,
-                                               xrName=xrName, url=url,
+            items = self._construct_stac_items(fileNameBase, time,
+                                               url=url,
                                                skip=skip)
-            myXR = self._lazy_open_stack(items, stackVar,
-                                         overviewLevel=overviewLevel)
+            myXR = self._lazy_open_stack(items, skip=skip,
+                                         overviewLevel=overviewLevel,
+                                         chunkSize=chunkSize,
+                                         fill_value=fill_value)
         # Initialize array
-        self.initXR(myXR, time=time, time1=time1, time2=time2)
+        self.initXR(myXR, time=time, time1=time1, time2=time2,
+                    useStack=useStack)
 
-    def initXR(self, XR, time=None, time1=None, time2=None, xrName='None'):
+    def initXR(self, XR, time=None, time1=None, time2=None, xrName='None',
+               useStack=False):
         '''
         Setup class using passed xarray either input from file or passed
         directly.
@@ -137,6 +164,9 @@ class nisarBase2D():
             Nominal start time. The default is None.
         time2 : TYPE, optional
             Nominal endtie. The default is None.
+        xrName: str, optional
+            Name for xr array. The default is 'None'
+            
         Returns
         -------
         None
@@ -147,7 +177,7 @@ class nisarBase2D():
         self.xr = XR
         self.subset = XR
         # get the geoinfo
-        self._parseGeoInfo()
+        self._parseGeoInfo()  
         #
         if time1 is not None and 'time1' not in list(self.xr.coords):
             self.xr['time1'] = time1
@@ -157,6 +187,37 @@ class nisarBase2D():
         self.xr.rename(xrName)
         # Save variables to (self.vx, self.vy)
         self._mapVariables()
+
+    def _mapVariables(self):
+        ''' Map the xr variables to band variables (e.g., 'vx' -> self.vx) '''
+        # Map variables
+        for myVar in self.subset.band.data:
+            myVar = str(myVar)
+            bandData = np.squeeze(self.subset.sel(band=myVar).data)
+            setattr(self, myVar, bandData)
+
+    def _parseGeoInfoStack(self):
+        ''' parse geoinfo for stackstac - do not use until stac fixed'''
+        myXr = self.subset
+        # get epsg
+        self.epsg = np.int32(myXr.epsg)
+        gT = list(myXr['proj:transform'].data.item())
+        self.dx, self.dy = abs(gT[4]), abs(gT[5])
+        #
+        self._computeCoords(myXr)
+
+    def _parseGeoInfo(self):
+        '''Parse geo info out of xr spatial ref'''
+        myXr = self.subset
+        # Get wkt and convert to crs
+        self.wkt = myXr.spatial_ref.attrs['spatial_ref']
+        myCRS = pyproj.CRS.from_wkt(self.wkt)
+        # Save epsg
+        self.epsg = myCRS.to_epsg()
+        # get lower left corner, sx, sy, dx, dy
+        gT = list(myXr.rio.transform())
+        self.dx, self.dy = abs(gT[0]), abs(gT[4])
+        self._computeCoords(myXr)
 
     def readFromNetCDF(self, cdfFile):
         '''
@@ -213,56 +274,94 @@ class nisarBase2D():
         self.subset.load()
         self._mapVariables()
 
-    def _construct_stac_items(self, fileNameBase, stackVar, url=True, skip=[]):
+    def _get_stac_item_template(self, URL, skip=[], url=True):
+        '''
+        read first geotiff to get STAC Item template (returns pystac.Item)
+        '''
+        date = datetime(1999, 1, 1)  # dummy date
+        # Create with first asset
+        myVariables = [x for x in self.variables if x not in skip]
+        band1 = myVariables[0]
+        bandTiff = URL.replace('*', band1) + '.tif'
+        if url:
+            bandTiff = f'/vsicurl/?list_dir=no&url={bandTiff}'
+
+        item = rio_stac.create_stac_item(bandTiff,
+                                         input_datetime=date,
+                                         asset_name=band1,
+                                         asset_media_type=str(
+                                             pystac.MediaType.COG),
+                                         with_proj=True,
+                                         with_raster=True,
+                                         )
+        for band in myVariables[1:]:
+            newAsset = deepcopy(item.assets[band1].to_dict())
+            newAsset['href'] = URL.replace('*', band) + '.tif'
+            item.asset = item.add_asset(band,
+                                        item.assets[band1].from_dict(newAsset))
+        self.dtype = \
+            item.assets[myVariables[0]].extra_fields[
+                'raster:bands'][0]['data_type']
+        return item
+
+    def _construct_stac_items(self, fileNameBase, time, url=True, skip=[]):
         ''' construct STAC-style dictionaries of CMR urls for stackstac
         Currently not debugged
         '''
-        bandTiff = fileNameBase
-        option = '?list_dir=no'
-        if url:
-            bandTiff = f'/vsicurl/{option}&url={fileNameBase}'
-        collection = bandTiff.split('/')[-3].replace('*', 'vv')
-        myId = os.path.basename(fileNameBase).replace('*', 'vv')
-        item = {'id': myId,
-                'collection': collection,
-                'properties': {'datetime': datetime.strptime(
-                    fileNameBase.split('/')[-2], '%Y.%m.%d').isoformat()},
-                'assets': {},
-                'bbox': stackVar['bbox']
-                }
-        for band in self.variables:
-            if band in skip:
-                continue
-            item['assets'][band] = {'href':
-                                    bandTiff.replace('*', band) + '.tif',
-                                    'type': 'application/x-geotiff'}
-        return [item]
-
-    def _lazy_open_stack(self, items, stackVar):
-        ''' return stackstac xarray dataarray - not debugged '''
-        print('this method should not be used until problems with '
-              'stackstac resolved')
-        return
-        fill_value = np.nan
-        self.useStackstac = True
+        if self.stackTemplate is None:
+            self.stackTemplate = self._get_stac_item_template(fileNameBase,
+                                                              skip=[], url=url)
+        # make a copy
+        item = deepcopy(self.stackTemplate)
+        # update time
+        item.set_datetime(time)
+        # Conver to dict
+        itemDict = item.to_dict()
+        itemDict['id'] = fileNameBase
         #
-        self.epgs = stackVar['epsg']
+        option = '?list_dir=no'
+        # update variables
+        for band in self.variables:
+            if url:
+                bandTiff = f'/vsicurl/{option}&url={fileNameBase}'
+            else:
+                bandTiff = fileNameBase
+            itemDict['assets'][band]['href'] = \
+                f'{bandTiff.replace("*",band)}.tif'
+        #  Convert back to item type
+        return item.from_dict(itemDict)
+
+    def _lazy_open_stack(self, items, skip=[], chunkSize=1024,
+                         overviewLevel=-1, fill_value=np.nan):
+        ''' return stackstac xarray dataarray - not debugged '''
+        # fill_value = np.nan
+        self.useStackstac = True
+        myVariables = [x for x in self.variables if x not in skip]
+        # Compute overview resolution consistent with xarray width/npix
+        ny, nx = np.int64(items.properties['proj:shape'] /
+                          overviewLevels[overviewLevel])
+        box = items.properties['proj:bbox']
+        resolution = (np.abs((box[2] - box[0]) / nx),
+                      np.abs((box[3] - box[1]) / ny))
+        # Create xarray using stackstac
         da = stackstac.stack(items,
-                             assets=self.variables,
-                             epsg=stackVar['epsg'],
-                             resolution=stackVar['resolution'],
+                             assets=myVariables,
                              fill_value=fill_value,
                              dtype=self.dtype,
+                             chunksize=chunkSize,
+                             snap_bounds=False,
                              xy_coords='center',
-                             chunksize=CHUNKSIZE,
-                             bounds=stackVar['bounds']
+                             resolution=resolution
                              )
-        da = da.rio.write_crs(f'epsg:{stackVar["epsg"]}')
+
+        da['name'] = 'temp'
+        da.rio.write_crs(f'epsg:{int(da.epsg)}', inplace=True)
         return da
 
     # @dask.delayed
     def _lazy_openTiff(self, fileNameBase, masked=True, url=False, time=None,
-                       xrName='None', skip=[], overviewLevel=None, suffix=''):
+                       xrName='None', skip=[], overviewLevel=None, suffix='',
+                       chunkSize=1024):
         '''
         Lazy open of a single velocity product
         Parameters
@@ -288,7 +387,7 @@ class nisarBase2D():
             xarray with the data from the tiff.
         '''
         das = []
-        chunks = {'band': 1, 'y': CHUNKSIZE, 'x': CHUNKSIZE}
+        chunks = {'band': 1, 'y': chunkSize, 'x': chunkSize}
         option = '?list_dir=no'  # Saves time by not reading full directory
         # Read individual bands
         for band in self.variables:
@@ -314,37 +413,6 @@ class nisarBase2D():
         # Concatenate bands (components)
         return xr.concat(das, dim='band', join='override',
                          combine_attrs='drop')
-
-    def _mapVariables(self):
-        ''' Map the xr variables to band variables (e.g., 'vx' -> self.vx) '''
-        # Map variables
-        for myVar in self.subset.band.data:
-            myVar = str(myVar)
-            bandData = np.squeeze(self.subset.sel(band=myVar).data)
-            setattr(self, myVar, bandData)
-
-    def _parseGeoInfoStack(self):
-        ''' parse geoinfo for stackstac - do not use until stac fixed'''
-        myXr = self.subset
-        # get epsg
-        self.epsg = int(myXr.crs.split(":")[1])
-        gT = myXr.transform
-        self.dx, self.dy = abs(gT[0]), abs(gT[4])
-        #
-        self._computeCoords(myXr)
-
-    def _parseGeoInfo(self):
-        '''Parse geo info out of xr spatial ref'''
-        myXr = self.subset
-        # Get wkt and convert to crs
-        self.wkt = myXr.spatial_ref.attrs['spatial_ref']
-        myCRS = pyproj.CRS.from_wkt(self.wkt)
-        # Save epsg
-        self.epsg = myCRS.to_epsg()
-        # get lower left corner, sx, sy, dx, dy
-        gT = list(myXr.rio.transform())
-        self.dx, self.dy = abs(gT[0]), abs(gT[4])
-        self._computeCoords(myXr)
 
     def timeSliceData(self, date1, date2):
         '''
@@ -587,7 +655,12 @@ class nisarBase2D():
             # If km, convert to m for internal calcs
             if units == 'km':
                 xout, yout = xout * 1000, yout * 1000.
-            return func(inst, xout, yout, *args, **kwargs)
+            result = func(inst, xout, yout, *args, **kwargs)
+            if 'returnXR' in kwargs:
+                if kwargs['returnXR'] and units == 'km':
+                    result = result.assign_coords(x=result.x * 0.001)
+                    result = result.assign_coords(y=result.y * 0.001)
+            return result
         return convertCoordsInner
 
     @_convertCoordinates
@@ -776,18 +849,19 @@ class nisarBase2D():
     # ---- time/date related routines
     #
 
-    def parseDate(self, date, defaultDate=True):
+    def parseDate(self, date, defaultDate=True, returnString=False):
         ''' Accept date as either datetime or YYYY-MM-DD
         Parameters
         ----------
         date, str or datetime
         Returns
         -------
-        date in as datetime instance
+        date as datetime instance
         '''
         if date is None:
             if defaultDate:
-                return np.datetime64(self.subset.time.item(0), 'ns')
+                return self.datetime64ToDatetime(
+                    np.datetime64(self.subset.time.item(0), 'ns'))
             else:
                 return None
         try:
@@ -945,7 +1019,7 @@ class nisarBase2D():
         elif colorBarPosition in ['top', 'tottom']:
             cbAx.xaxis.set_ticks_position(colorBarPosition)
             cbAx.xaxis.set_label_position(colorBarPosition)
-      
+
     def hsvSpeedRender(self, speed, vmin=1, vmax=3000):
         '''
         Convert speed to rgb version of hsv rendering of image.
@@ -962,15 +1036,15 @@ class nisarBase2D():
         -------
         rgb image.
         '''
-        print(speed.shape)
+        # print(speed.shape)
         background = np.isnan(speed)
-        print(type(background))
+        # type(background))
         # Uniform value
         value = np.full(speed.shape, 1)
         # Reduce saturation on low end
         saturation = np.clip((speed/125 + .5)/1.5, 0, 1)
         # Force background to white
-        print(speed.shape, saturation.shape)
+        # print(speed.shape, saturation.shape)
         saturation[background] = 0
         hue = np.log10(np.clip(speed, vmin, vmax)) / \
             (np.log10(vmax) - np.log(vmin))
@@ -995,11 +1069,78 @@ class nisarBase2D():
         # return color map
         return colors.LinearSegmentedColormap.from_list('my', rgb, N=ncolors)
 
-    def displayVar(self, var, date=None, ax=None, plotFontSize=14,
+    def _dateTitle(self, date, midDate):
+        '''
+
+        Parameters
+        ----------
+        midDate : Boolean
+            Use central date.
+        Returns
+        -------
+        date as string for title.
+
+        '''
+        middleDate, date1, date2 = self._dates(date, asString=True)
+        if midDate:
+            title = middleDate
+        else:
+            title = f'{date1} - {date2}'
+        return title
+
+    def _labelAxes(self, ax, xLabel, yLabel, title=None,
+                   labelFontSize=15, titleFontSize=16, plotFontSize=13,
+                   fontScale=1, axisOff=False):
+        '''
+        Label and format axes
+
+        Parameters
+        ----------
+        ax : axis
+            matplotlib axes. The default is None.
+        xLabel : tr, optional
+            x-axis label. The default is 'Distance', use '' to disable.
+        yLabel : tr, optional
+            x-axis label. The default is band appropriate (e.g, Speed),
+            use '' to disable.
+        title : str, optional
+            Plot title. The default is None.
+        units : str, optional
+            Units (m or km) for the x, y coordinates. The default is 'm'
+        labelFontSize : int, optional
+            Font size for x&y labels. The default is 15.
+        titleFontSize : int, optional
+            Fontsize for plot title The default is 16.
+        plotFontSize : int, optional
+            Font size for tick labels. The default is 13.
+        fontScale : float, optional
+            Scale factor to apply to label, title, and plot fontsizes.
+            The default is 1.
+        axisOff : Boolean, optional
+            Set to True to turn axis off. The default is False.
+
+        Returns
+        -------
+        None.
+
+        '''
+        if axisOff:
+            ax.axis('off')
+        else:
+            ax.set_xlabel(xLabel, size=labelFontSize * fontScale)
+            ax.set_ylabel(yLabel, size=labelFontSize * fontScale)
+            ax.tick_params(axis='both', labelsize=plotFontSize * fontScale)
+            ax.tick_params(axis='y', labelsize=plotFontSize * fontScale)
+        # Create title from dates
+        if title is not None:
+            ax.set_title(title, fontsize=titleFontSize * fontScale)
+
+    def displayVar(self, band, date=None, ax=None, title=None,
                    colorBar=True,
-                   labelFontSize=12, titleFontSize=15, axisOff=False,
+                   labelFontSize=15, titleFontSize=16, plotFontSize=13,
+                   axisOff=False,
                    vmin=0, vmax=7000, units='m', scale='linear', cmap=None,
-                   title=None, midDate=True, colorBarLabel='Speed (m/yr)',
+                   midDate=True, colorBarLabel='Speed (m/yr)',
                    masked=None, colorBarPosition='right', colorBarSize='5%',
                    colorBarPad=0.05, wrap=None, extend=None,
                    backgroundColor=(1, 1, 1),
@@ -1008,20 +1149,65 @@ class nisarBase2D():
         Use matplotlib to show velocity in a single subplot with a color
         bar. Clip to absolute max set by maxv, though in practives percentile
         will clip at a signficantly lower value.
+
         Parameters
         ----------
-        fig : matplot lib fig, optional
-            Pass in an existing figure. The default is None.
-        maxv : float or int, optional
-            max velocity. The default is 7000.
-        wrap :  number, optional
-            Display velocity modululo wrap value
+        band : str
+            band name (e.g., sigma, vx, vy).
+        date : 'YYYY-MM-DD' or datetime, optional
+            The date in the series to plot. The default is the first date.
+        title : TYPE, optional
+            DESCRIPTION. The default is None.
+        ax : axis, optional
+            matplotlib axes. The default is None.
+        colorBar : TYPE, optional
+            DESCRIPTION. The default is True.
+        labelFontSize : int, optional
+            Font size for x&y labels. The default is 15.
+        titleFontSize : int, optional
+            Fontsize for plot title The default is 16.
+        plotFontSize : int, optional
+            Font size for tick labels. The default is 13.
+        fontScale : float, optional
+            Scale factor to apply to label, title, and plot fontsizes.
+            The default is 1.
+        axisOff : Boolean, optional
+            Set to True to turn axis off. The default is False.
+        vmax : number, optional
+            max velocity to display. The default is 7000.
+        vmin : number, optional
+            min velocity to display. The default is 0.
+        units : str, optional
+            units of coordiinates (m or km). The default is 'm'.
+        scale : str, optional
+            Scale type ('linear' or 'log') The default is 'linear'.
+        cmap : colormap specific, optional
+            Colormap. The default is None.
+        midDate : Boolean, optional
+            Use middle date for titel. The default is True.
+        colorBarLabel : str, optional
+            Label for colorbar. The default is 'Speed (m/yr)'.
+        masked : Boolean, optional
+            Masked for imshow. The default is None.
+        colorBarPosition : TYPE, optional
+            Color bar position (e.g., left, top...). The default is 'right'.
+        colorBarSize : str, optional
+            Color bar size specfied as 'n%'. The default is '5%'.
+        colorBarPad : float, optional
+            Color bar pad. The default is 0.05.
+        wrap : float, optional
+            Display data modulo wrap. The default is None.
+        extend : str, optional
+            Colorbar extend ('both','min', 'max'). The default is None.
+        backgroundColor : color, optional
+            Background color. The default is (1, 1, 1).
+        **kwargs : dict
+            Keywords to imshow.
+
         Returns
         -------
-        fig : matplot lib fig
-            Figure used for plot.
-        ax : matplot lib ax
-            Axis used for plot.
+        pos : TYPE
+            DESCRIPTION.
         '''
         if not self._checkUnits(units):
             return
@@ -1032,11 +1218,11 @@ class nisarBase2D():
         norm, cmap = self.colorSetup(scale, cmap, vmin, vmax,
                                      backgroundColor=backgroundColor)
         # Return if invalid var
-        if var not in self.variables:
-            print(f'{var} is not a valid, the choices are {self.variables}')
+        if band not in self.variables:
+            print(f'{band} is not a valid, the choices are {self.variables}')
             return
         # Extract data for band
-        displayVar = self.subset.sel(band=var)
+        displayVar = self.subset.sel(band=band)
         # Extract date for time
         date = self.parseDate(date)
         displayVar = displayVar.sel(time=date, method='nearest')
@@ -1051,29 +1237,19 @@ class nisarBase2D():
                 extend = {'log': 'both', 'linear': 'max'}[scale]
             except Exception:
                 print('Could not set extend for colorbar using scale={scale}')
-        # 
+        #
         if cmap == 'log':
             displayVar = self.hsvSpeedRender(displayVar.data)
         pos = ax.imshow(np.ma.masked_where(displayVar == masked, displayVar,
                                            copy=True), norm=norm, cmap=cmap,
                         extent=self.extent(units=units), **kwargs)
-        # labels and such
-        if axisOff:
-            ax.axis('off')
-        else:
-            ax.set_xlabel(f'X ({units})', size=labelFontSize)
-            ax.set_ylabel(f'Y ({units})', size=labelFontSize)
-            ax.tick_params(axis='x', labelsize=plotFontSize)
-            ax.tick_params(axis='y', labelsize=plotFontSize)
-        # Create title from dates
         if title is None:
-            middleDate, date1, date2 = self._dates(date, asString=True)
-            if midDate:
-                title = middleDate
-            else:
-                title = f'{date1} - {date2}'
-        ax.set_title(title, fontsize=titleFontSize)
-        # labels and such.
+            title = self._dateTitle(date, midDate)
+        # labels and such
+        self._labelAxes(ax, f'x ({units})',  f'y ({units})',
+                        labelFontSize=labelFontSize,
+                        titleFontSize=titleFontSize, plotFontSize=plotFontSize,
+                        axisOff=axisOff, title=title)
         if colorBar:
             self._colorBar(pos, ax, colorBarLabel, colorBarPosition,
                            colorBarSize, colorBarPad, labelFontSize,
@@ -1283,6 +1459,10 @@ class nisarBase2D():
         if os.path.exists(cdfFile):
             os.remove(cdfFile)
         #
+        for x in self.subset.coords:
+            if 'proj' in x or 'raster' in x:
+                self.subset = self.subset.drop(x, dim=None)
+        #
         self.subset.to_netcdf(path=cdfFile)
         return cdfFile
 
@@ -1304,3 +1484,109 @@ class nisarBase2D():
         else:
             tiffName = f'{tiffRoot}.{myVar}'
         return f'{tiffName}.tif'
+
+    #
+    # ---- Plot routines
+    #
+
+    def _plotPoint(self, x, y, band, *argv, ax=None, units='m',
+                   sourceEPSG=None, **kwargs):
+        '''
+        Interpolate data set at point x, y, and plot result vs time
+
+        Parameters
+        ----------
+        x : float
+            x-coordinate.
+        y : float
+            y-coordinate.
+        band : str
+            band name (e.g., sigma, vx, vy).
+        *argv : list
+            Additional args to pass to plt.plot (e.g. 'r*').
+        ax : axis, optional
+            matplotlib axes. The default is None.
+        units : str, optional
+            units of coordiinates (m or km). The default is 'm'.
+        **kwargs : dict
+            kwargs pass through to plt.plot.
+
+        Returns
+        -------
+        ax.
+
+        '''
+        self._checkUnits(units)
+        # Create axes
+        if ax is None:
+            fig, ax = plt.subplots(1, 1,
+                                   constrained_layout=True, figsize=(10, 8))
+        if band is None:
+            print('No band specified')
+            return
+        # Interpolate
+        result = self.interp(x, y, returnXR=True, sourceEPSG=sourceEPSG,
+                             units=units).sel(band=band)
+        #print(result)
+        # Plot result
+        ax.plot(result.time, np.squeeze(result), *argv, **kwargs)
+        return ax
+
+    def _plotProfile(self, x, y, band, date, *argv, label=None, ax=None,
+                     sourceEPSG=None, distance=None, units='m', **kwargs):
+        '''
+        Interpolate data for profile x, y and plot as a function of distance
+
+        Parameters
+        ----------
+        x : float
+            x-coordinate.
+        y : float
+            y-coordinate.
+        band : str
+            band name (e.g., sigma, vx, vy).
+        date : 'YYYY-MM-DD' or datetime, optional
+            The date in the series to plot. The default is the first date.
+        *argv : list
+            Additional args to pass to plt.plot (e.g. 'r*').
+        label : str, optional
+            label for plot (same as plt.plot label). The default is YYYY-MM=DD.
+        ax : axis, optional
+            matplotlib axes. The default is None.
+        distance : nparray, optional
+            distance variable for plot.
+            The default is None, which causes it to be calculated.
+        units : str, optional
+            units of coordiinates (m or km). The default is 'm'.
+        **kwargs : dict
+            kwargs pass through to plt.plot.
+
+        Returns
+        -------
+        ax. Either the value passed on or the one created if none given.
+        '''
+        self._checkUnits(units)
+        # Create axes
+        if ax is None:
+            fig, ax = plt.subplots(1, 1,
+                                   constrained_layout=True, figsize=(10, 8))
+        # Return if no band specified
+        if band is None:
+            print('No band specified')
+            return
+        #
+        date = self.parseDate(date, returnString=True)
+        if label is None:
+            label = date.strftime('%Y-%m-%d')
+        # Interpolate
+        result = self.interp(x, y, returnXR=True,
+                             units=units, sourceEPSG=sourceEPSG,
+                             ).sel(band=band).sel(time=date, method='nearest')
+        # Compute distance along xy profile
+        if distance is None:
+            distance = np.cumsum(
+                np.concatenate(([0], np.sqrt(np.diff(result.x)**2 +
+                                             np.diff(result.y)**2))))
+        # Plot result
+        ax.plot(distance, result, label=label, *argv, **kwargs)
+        return ax

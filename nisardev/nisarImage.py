@@ -115,9 +115,9 @@ class nisarImage(nisarBase2D):
 
         self.myVariables(self.imageType)
 
-    def readDataFromTiff(self, fileNameBase, url=False, stackVar=None,
+    def readDataFromTiff(self, fileNameBase, url=False, useStack=True,
                          dateFormat='%d%b%y', index1=3, index2=4,
-                         overviewLevel=None, suffix=''):
+                         overviewLevel=-1, suffix='', chunkSize=1024):
         '''
         read in a tiff product fileNameBase.*[,tif], tif ext optional.
         Files can be read as np arrays of xarrays (useXR=True, not well tested)
@@ -127,14 +127,19 @@ class nisarImage(nisarBase2D):
             FileNameBase should be of the form
         url : bool, optional
             Read data from url
-        stackVar : diction, optional (under development)
-            for stackstac {'bounds': [], 'resolution': res, 'epsg': epsg}
-        dateFormat : format code to strptime
+        useStack : boolean, optional
+            Uses stackstac for full resolution data. The default is True.
+        dateFormat : str, optional
+            Format code to strptime from file name. Default is %d%b%y',
+        index1, index2 : location of dates in filename with seperated by _
+            dateFormat : format code to strptime
         overviewLevel: int
             Overview (pyramid) level to read: None->full res, 0->1/2 res,
             1->1/4 res....to image dependent max downsampling level
         suffix : str, optional
             Any suffix that needs to be appended (e.g., for dropbox links)
+        chunkSize : int, optional
+            Chunksize for xarray. Default is 1024.
         Returns
         -------
         None.
@@ -147,9 +152,14 @@ class nisarImage(nisarBase2D):
                                          index1=index1, index2=index2)
         self.variables = self.myVariables(self.imageType)
         #
-        self.readXR(fileNameBase, url=url, masked=False, stackVar=stackVar,
+        if 'image' in self.variables:
+            fill_value = 0
+        else:
+            fill_value = np.nan
+        self.readXR(fileNameBase, url=url, masked=False, useStack=useStack,
                     time=self.midDate, time1=self.date1,
-                    time2=self.date2, overviewLevel=overviewLevel, suffix=suffix)
+                    time2=self.date2, overviewLevel=overviewLevel,
+                    suffix=suffix, fill_value=fill_value, chunkSize=chunkSize)
         # Rename with to image type
         self.xr = self.xr.rename(self.imageType)
         self.fileNameBase = fileNameBase  # save filenameBase
@@ -281,3 +291,178 @@ class nisarImage(nisarBase2D):
                         colorBarPosition=colorBarPosition,
                         colorBarSize=colorBarSize, colorBarPad=colorBarPad,
                         **kwargs)
+
+    def plotPoint(self, x, y, *args, band=None, ax=None, **kwargs):
+        '''
+        Interpolate data set at point x, y, and plot result vs time
+
+        Parameters
+        ----------
+        x : float
+            x-coordinate.
+        y : float
+            y-coordinate.
+
+        *argv : list
+            Additional args to pass to plt.plot (e.g. 'r*').
+        band : str, optional
+            band name (image, sigma0, gamma0). The default is 1st band loaded.
+        ax : axis, optional
+            matplotlib axes. The default is None.
+        **kwargs : dict
+            kwargs pass through to plt.plot.
+
+        Returns
+        -------
+        ax.
+
+        '''
+        band = self.variables[0]
+        ax = self._plotPoint(x, y, band, *args, ax=ax, **kwargs)
+        return ax
+
+    def plotProfile(self, x, y, *argv, band=None, ax=None,
+                    midDate=True, distance=None, units='m', **kwargs):
+        '''
+        Interpolate data for profile x, y and plot as a function of distance
+
+        Parameters
+        ----------
+        x : float
+            x-coordinate.
+        y : float
+            y-coordinate.
+
+        *argv : list
+            Additional args to pass to plt.plot (e.g. 'r*').
+        band : str, optional
+            band name (image, sigma0, gamma0). The default is 1st band loaded.
+        ax : axis, optional
+            matplotlib axes. The default is None.
+        distance : nparray, optional
+            distance variable for plot.
+            The default is None, which causes it to be calculated.
+        **kwargs : dict
+            kwargs pass through to plt.plot.
+
+        Returns
+        -------
+        ax.
+        '''
+        band = self.variables[0]
+        ax = self._plotProfile(x, y, band, *argv, date=None, ax=ax,
+                               midDate=midDate, distance=distance, units=units,
+                               **kwargs)
+        return ax
+
+    def labelProfilePlot(self, ax, band=None,
+                         xLabel=None, yLabel=None,
+                         units='m',
+                         title=None,
+                         labelFontSize=15, titleFontSize=16, plotFontSize=13,
+                         fontScale=1, axisOff=False):
+        '''
+        Label a profile plot
+
+        Parameters
+        ----------
+        ax : axis
+            matplotlib axes. The default is None.
+        band : str, optional
+            band name (vx, vy, vv). The default is 'vv'.
+        xLabel : tr, optional
+            x-axis label. The default is 'Distance', use '' to disable.
+        yLabel : tr, optional
+            x-axis label. The default is band appropriate (e.g, Speed),
+            use '' to disable.
+        units : str, optional
+            Units (m or km) for the x, y coordinates. The default is 'm'
+        title : str, optional
+            Plot titel. The default is None.
+        labelFontSize : int, optional
+            Font size for x&y labels. The default is 15.
+        titleFontSize : int, optional
+            Fontsize for plot title The default is 16.
+        plotFontSize : int, optional
+            Font size for tick labels. The default is 13.
+        fontScale : float, optional
+            Scale factor to apply to label, title, and plot fontsizes.
+            The default is 1.
+        axisOff : Boolean, optional
+            Set to True to turn axis off. The default is False.
+
+        Returns
+        -------
+        None.
+
+        '''
+        if band not in self.variables:
+            band = self.variables[0]
+        imageLabels = {'image': 'DN value', 'gamma0': '$\\gammma_o$ (dB)',
+                       'sigma0': '$\\sigma_o$ (dB)'}
+        if xLabel is None:
+            xLabel = f'Distance ({units})'
+        if yLabel is None:
+            yLabel = imageLabels[band]
+        #
+        self._labelAxes(ax, xLabel, yLabel,
+                        labelFontSize=labelFontSize,
+                        titleFontSize=titleFontSize,
+                        plotFontSize=plotFontSize,
+                        fontScale=fontScale,
+                        axisOff=axisOff, title=title)
+
+    def labelPointPlot(self, ax, band=None,
+                       xLabel=None, yLabel=None,
+                       units='m',
+                       title=None,
+                       labelFontSize=15, titleFontSize=16, plotFontSize=13,
+                       fontScale=1, axisOff=False):
+        '''
+        Label a profile plot
+
+        Parameters
+        ----------
+        ax : axis
+            matplotlib axes. The default is None.
+        band : str, optional
+            band name (vx, vy, vv). The default is 'vv'.
+        xLabel : tr, optional
+            x-axis label. The default is 'Distance', use '' to disable.
+        yLabel : tr, optional
+            x-axis label. The default is band appropriate (e.g, Speed),
+            use '' to disable.
+        units : str, optional
+            Units (m or km) for the x, y coordinates. The default is 'm'
+        title : str, optional
+            Plot title. The default is None.
+        labelFontSize : int, optional
+            Font size for x&y labels. The default is 15.
+        titleFontSize : int, optional
+            Fontsize for plot title The default is 16.
+        plotFontSize : int, optional
+            Font size for tick labels. The default is 13.
+        fontScale : float, optional
+            Scale factor to apply to label, title, and plot fontsizes.
+            The default is 1.
+        axisOff : Boolean, optional
+            Set to True to turn axis off. The default is False.
+
+        Returns
+        -------
+        None.
+
+        '''
+        band = self.variables[0]
+        speedLabels = {'vv': 'Speed', 'vx': '$v_x$', 'vy': '$v_y$'}
+        if xLabel is None:
+            xLabel = 'Date'
+        if yLabel is None:
+            yLabel = speedLabels[band] + ' (m/yr)'
+        #
+        self._labelAxes(ax, xLabel, yLabel,
+                        labelFontSize=labelFontSize,
+                        titleFontSize=titleFontSize,
+                        plotFontSize=plotFontSize,
+                        fontScale=fontScale,
+                        axisOff=axisOff, title=title)
