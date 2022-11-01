@@ -49,12 +49,12 @@ class nisarVelSeries(nisarBase2D):
         self.variables = None
         self.verbose = verbose
         self.noDataDict = {'vx': -2.0e9, 'vy': -2.0e9, 'vv': -1.0,
-                           'ex': -1.0, 'ey': -1.0}
+                           'ex': -1.0, 'ey': -1.0, 'dT': -2.0e9}
         self.gdalType = gdal.GDT_Float32  # data type for velocity products
         self.dtype = 'float32'
         self.nLayers = 0  # Number of time layers
 
-    def myVariables(self, useVelocity, useErrors, readSpeed=False):
+    def myVariables(self, useVelocity, useErrors, useDT, readSpeed=False):
         '''
         Based on the input flags, this routine determines which velocity/error
         fields that an instance will contain.
@@ -76,6 +76,8 @@ class nisarVelSeries(nisarBase2D):
             myVars += ['vx', 'vy', 'vv']
         if useErrors:
             myVars += ['ex', 'ey']
+        if useDT:
+            myVars += ['dT']
         self.variables = myVars
         return myVars
 
@@ -129,6 +131,7 @@ class nisarVelSeries(nisarBase2D):
     # ------------------------------------------------------------------------
 
     def readSeriesFromTiff(self, fileNames, useVelocity=True, useErrors=False,
+                           useDT=False,
                            readSpeed=False, url=False, useStack=True,
                            index1=None, index2=None, dateFormat=None,
                            overviewLevel=-1, suffix='', chunkSize=1024):
@@ -149,9 +152,11 @@ class nisarVelSeries(nisarBase2D):
             The wildcard (*) will be filled with the values in myVars
             e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
         useVelocity : bool, optional
-            Interpolate velocity if True. The default is True.
+            Include velocity if True. The default is True.
         useErrors : bool, optional
-            Interpolate errors if True. The default is False.
+            Include errors if True. The default is False.
+        useDT : bool, optional
+            Include dT (see GrIMP documentation). The default is False.
         readSpeed : bool, optional
             Read speed (.vv) if True. The default is False.
         url : bool, optional
@@ -173,7 +178,8 @@ class nisarVelSeries(nisarBase2D):
         -------
         None.
         '''
-        self.variables = self.myVariables(useVelocity, useErrors, readSpeed)
+        self.variables = self.myVariables(useVelocity, useErrors, useDT,
+                                          readSpeed=readSpeed)
         self.velMaps = []
         #
         stackTemplate = None
@@ -535,3 +541,62 @@ class nisarVelSeries(nisarBase2D):
                                distance=distance, units=units,
                                **kwargs)
         return ax
+
+    def inspect(self, band='vv', date=None, imgOpts={}, plotOpts={}):
+        '''
+        Display one layer of stack with interactive map to plot time series
+        at a point.
+
+        Parameters
+        ----------
+        band : str, optional
+            Band id. The default is 'vv'.
+        date : 'YYYY-MM-DD' str or datetime, optional
+            The date for the map image. The default is None.
+        imgOpts : dict, optional
+            Image display options. The default None for vv defaults to
+            {'clim': (0, 3000), 'logz': True, 'cmap': 'viridis'}.
+        plotOpts : dict, optional
+            Plot display options. The default is None, which defaults for vv to
+             {'ylabel': 'Speed (m/yr)', 'xlabel': 'Date'}.
+
+        Returns
+        -------
+        panel
+            Returns the panel with the interactive plots.
+
+        '''
+        defaultImgOpts = {
+            'vv': {'clim': (0, 3000), 'logz': True, 'cmap': 'viridis'},
+            'vx': {'clim': (-1500, 1500), 'logz': False, 'cmap': 'bwr'},
+            'vy': {'clim': (-1500, 1500), 'logz': False, 'cmap': 'bwr'},
+            'ex': {'clim': (0, 20), 'logz': False, 'cmap': 'Magma'},
+            'ey': {'clim': (0, 20), 'logz': False, 'cmap': 'Magma'},
+            'dT': {'clim': (-30, 30), 'logz': False, 'cmap': 'bwy'}
+        }
+
+        defaultPlotOpts = {
+            'vv': {'ylabel': 'Speed (m/yr)', 'xlabel': 'Date'},
+            'vx': {'ylabel': 'vx (m/yr)', 'xlabel': 'Date'},
+            'vy': {'ylabel': 'vy (m/yr)', 'xlabel': 'Date'},
+            'ex': {'ylabel': '$ex (m/yr)$', 'xlabel': 'Date'},
+            'ey': {'ylabel': 'ey (m/yr)', 'xlabel': 'Date'},
+            'dT': {'ylabel': 'dT (days)', 'xlabel': 'Date'},
+        }
+        # Customize other common options
+        for key in defaultImgOpts[band]:
+            if key not in imgOpts:
+                imgOpts[key] = defaultImgOpts[band][key]
+        # extra img opts
+        if 'xlabel' not in imgOpts:
+            imgOpts['xlabel'] = 'X (m)'
+        if 'ylabel' not in imgOpts:
+            imgOpts['ylabel'] = 'Y (m)'
+        # extra plot opts
+        for key in defaultPlotOpts[band]:
+            if key not in plotOpts:
+                plotOpts[key] = defaultPlotOpts[band][key]
+        if 'title' not in plotOpts:
+            plotOpts['title'] = f'{band} time series'
+
+        return self._view(band, imgOpts, plotOpts, date=date, markerColor='w')

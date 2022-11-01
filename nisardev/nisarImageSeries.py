@@ -6,8 +6,6 @@ Created on Mon Feb 10 11:08:15 2020
 @author: ian
 """
 
-# geoimage.py
-import numpy as np
 from nisardev import nisarBase2D, nisarImage
 # import matplotlib.pylab as plt
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -123,7 +121,7 @@ class nisarImageSeries(nisarBase2D):
     # ------------------------------------------------------------------------
     # I/O Routines
     # ------------------------------------------------------------------------
-        
+
     def readSeriesFromTiff(self, fileNames, url=False, useStack=True,
                            index1=3, index2=4, dateFormat='%d%b%y',
                            overviewLevel=-1, suffix='', chunkSize=1024):
@@ -206,7 +204,7 @@ class nisarImageSeries(nisarBase2D):
         self.subset = self.xr
         # get times
         self._getTimes()
-        
+
     def timeSliceImage(self, date1, date2):
         ''' Create a new imageSeries for the range date1 to date2
         Parameters
@@ -498,3 +496,58 @@ class nisarImageSeries(nisarBase2D):
                         plotFontSize=plotFontSize,
                         fontScale=fontScale,
                         axisOff=axisOff, title=title)
+
+    def inspect(self, band='image', date=None, imgOpts={}, plotOpts={}):
+        '''
+        Display one layer of stack with interactive map to plot time series
+        at a point.
+
+        Parameters
+        ----------
+        band : str, optional
+            Band id. The default is 'image'.
+        date : 'YYYY-MM-DD' str or datetime, optional
+            The date for the map image. The default is None.
+        imgOpts : dict, optional
+            Image display options. The default None for vv defaults to
+            {'clim': (0, 255), 'logz': False, 'cmap': 'gray'} for 'image'
+            or
+            {'clim': (-30, 20), 'logz': False, 'cmap': 'gray'} for sigma/gamma.
+        plotOpts : dict, optional
+            Plot display options. The default is None, which defaults for to
+             {'ylabel': 'DN', 'xlabel': 'Date'} and for sigma/gamma to
+             {'ylabel': r'$\sigma/gamma_o$ (dB)', 'xlabel': 'Date'}.
+        Returns
+        -------
+        panel
+            Returns the panel with the interactive plots.
+
+        '''
+        defaultImgOpts = {
+            'image': {'clim': (0, 255), 'logz': False, 'cmap': 'gray'},
+            'sigma0': {'clim': (-30, 20), 'logz': False, 'cmap': 'gray'},
+            'gamma0': {'clim': (-30, 20), 'logz': False, 'cmap': 'gray'}
+        }
+
+        defaultPlotOpts = {
+            'image': {'ylabel': 'DN', 'xlabel': 'Date'},
+            'sigma0': {'ylabel': r'$\gamma_o$ (dB)', 'xlabel': 'Date'},
+            'gamma0': {'ylabel': r'$\gamma_o$ (dB)', 'xlabel': 'Date'}
+        }
+        band = str(self.subset.band.data[0])
+        print(band)
+        # Customize other common options
+        for key in defaultImgOpts[band]:
+            if key not in imgOpts:
+                imgOpts[key] = defaultImgOpts[band][key]
+        if 'xlabel' not in imgOpts:
+            imgOpts['xlabel'] = 'X (m)'
+        if 'ylabel' not in imgOpts:
+            imgOpts['ylabel'] = 'Y (m)'
+        for key in defaultPlotOpts[band]:
+            if key not in plotOpts:
+                plotOpts[key] = defaultPlotOpts[band][key]
+        if 'title' not in plotOpts:
+            plotOpts['title'] = f'{band} time series'
+
+        return self._view(band, imgOpts, plotOpts, date=date)

@@ -46,15 +46,15 @@ class nisarVel(nisarBase2D):
         None.
         '''
         nisarBase2D.__init__(self)
-        self.vx, self.vy, self.vv, self.ex, self.ey = [None] * 5
+        self.vx, self.vy, self.vv, self.ex, self.ey, self.dT = [None] * 6
         self.variables = None
         self.verbose = verbose
         self.noDataDict = {'vx': -2.0e9, 'vy': -2.0e9, 'vv': -1.0,
-                           'ex': -1.0, 'ey': -1.0}
+                           'ex': -1.0, 'ey': -1.0, 'dT': -2.e9}
         self.gdalType = gdal.GDT_Float32  # data type for velocity products
         self.dtype = 'float32'
 
-    def myVariables(self, useVelocity, useErrors, readSpeed=False):
+    def myVariables(self, useVelocity, useErrors, useDT, readSpeed=False):
         '''
         Based on the input flags, this routine determines which velocity/error
         fields that an instance will contain.
@@ -78,6 +78,8 @@ class nisarVel(nisarBase2D):
         #    myVars += ['vv']
         if useErrors:
             myVars += ['ex', 'ey']
+        if useDT:
+            myVars += ['dT']
         self.variables = myVars
         return myVars
 
@@ -130,6 +132,7 @@ class nisarVel(nisarBase2D):
         self._mapVariables()
 
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
+                         useDT=False,
                          readSpeed=False, url=False, useStack=True,
                          index1=4, index2=5, dateFormat='%d%b%y',
                          overviewLevel=-1, masked=True, suffix='',
@@ -151,9 +154,11 @@ class nisarVel(nisarBase2D):
             The wildcard (*) will be filled with the values in myVars
             e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
         useVelocity : bool, optional
-            Interpolate velocity if True. The default is True.
+            Include velocity if True. The default is True.
         useErrors : bool, optional
-            Interpolate errors if True. The default is False.
+            Include errors if True. The default is False.
+        useDT : bool, optional
+            Include dT (see GrIMP documentation). The default is False.
         readSpeed : bool, optional
             Read speed (.vv) if True. The default is False.
         url : bool, optional
@@ -179,7 +184,8 @@ class nisarVel(nisarBase2D):
         self.parseVelDatesFromFileName(fileNameBase, index1=index1,
                                        index2=index2, dateFormat=dateFormat,
                                        date1=date1, date2=date2)
-        self.variables = self.myVariables(useVelocity, useErrors, readSpeed)
+        self.variables = self.myVariables(useVelocity, useErrors, useDT,
+                                          readSpeed=readSpeed)
         if readSpeed:
             skip = []
         else:

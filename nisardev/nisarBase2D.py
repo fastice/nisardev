@@ -9,26 +9,27 @@ from abc import ABCMeta, abstractmethod
 from nisardev import myError
 import numpy as np
 import functools
-import xarray as xr
+import xarray
 import pyproj
 import dask
 import rioxarray
 import stackstac
 import os
 import matplotlib.pylab as plt
-from matplotlib import cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib import colors
 from datetime import datetime
 import rio_stac
 import pystac
+import holoviews as hv
+import panel as pn
 from copy import deepcopy
 # from dask.diagnostics import ProgressBar
 import math
+from bokeh.models.formatters import DatetimeTickFormatter
 
-#CHUNKSIZE = 1024
+overviewLevels = dict(zip(range(-1, 10), 2**np.arange(0, 11)))
 
-overviewLevels = dict(zip(range(-1, 10), 2**np.arange(0,11)))
 
 class nisarBase2D():
     ''' Abstract class to define xy polar stereo (3031, 3413) image objects
@@ -92,6 +93,11 @@ class nisarBase2D():
     @abstractmethod
     def reproduce():
         ''' Abstract reproduce to create a new version of this class.'''
+        pass
+
+    @abstractmethod
+    def inspectData():
+        ''' Abstract inspect to create a new version of this class.'''
         pass
 
     #
@@ -166,7 +172,7 @@ class nisarBase2D():
             Nominal endtie. The default is None.
         xrName: str, optional
             Name for xr array. The default is 'None'
-            
+
         Returns
         -------
         None
@@ -177,7 +183,7 @@ class nisarBase2D():
         self.xr = XR
         self.subset = XR
         # get the geoinfo
-        self._parseGeoInfo()  
+        self._parseGeoInfo()
         #
         if time1 is not None and 'time1' not in list(self.xr.coords):
             self.xr['time1'] = time1
@@ -232,7 +238,10 @@ class nisarBase2D():
         '''
         if '.nc' not in cdfFile:
             cdfFile = f'{cdfFile}.nc'
-        xDS = xr.open_dataset(cdfFile)
+        # Open and close first to clear any old data
+        xDS = xarray.open_dataset(cdfFile)
+        xDS.close()
+        xDS = xarray.open_dataset(cdfFile)
         xDS['time1'] = xDS.time1.compute()
         xDS['time2'] = xDS.time2.compute()
         # Pull the first variable that is not spatial_ref
@@ -331,7 +340,7 @@ class nisarBase2D():
         #  Convert back to item type
         return item.from_dict(itemDict)
 
-    def _lazy_open_stack(self, items, skip=[], chunkSize=1024,
+    def _lazy_open_stack(self, items, skip=[], chunkSize=512,
                          overviewLevel=-1, fill_value=np.nan):
         ''' return stackstac xarray dataarray - not debugged '''
         # fill_value = np.nan
@@ -353,7 +362,7 @@ class nisarBase2D():
                              xy_coords='center',
                              resolution=resolution
                              )
-
+        da.rio.write_crs(f'epsg:{int(da.epsg)}', inplace=True)
         da['name'] = 'temp'
         da.rio.write_crs(f'epsg:{int(da.epsg)}', inplace=True)
         return da
@@ -411,8 +420,8 @@ class nisarBase2D():
             da['_FillValue'] = self.noDataDict[band]
             das.append(da)
         # Concatenate bands (components)
-        return xr.concat(das, dim='band', join='override',
-                         combine_attrs='drop')
+        return xarray.concat(das, dim='band', join='override',
+                             combine_attrs='drop')
 
     def timeSliceData(self, date1, date2):
         '''
@@ -467,8 +476,8 @@ class nisarBase2D():
         for b in self.xr.band:
             bandOrderList.append(bandOrder[b.item()])
         # creete array for sort
-        myOrderXR = xr.DataArray(bandOrderList, coords=[self.xr['band']],
-                                 dims='band')
+        myOrderXR = xarray.DataArray(bandOrderList, coords=[self.xr['band']],
+                                     dims='band')
         # do sort
         self.xr = self.xr.sortby(myOrderXR)
 
@@ -691,7 +700,7 @@ class nisarBase2D():
         '''
         if np.isscalar(x):
             x, y = [x], [y]
-        xx1, yy1 = xr.DataArray(x), xr.DataArray(y)
+        xx1, yy1 = xarray.DataArray(x), xarray.DataArray(y)
         myXR = self.subset
         # Array to receive results
         date = self.parseDate(date, defaultDate=False)
@@ -777,7 +786,7 @@ class nisarBase2D():
     def anomaly(self):
         #
         myMean = self.subset.mean(dim='time')
-        myAnomalyXR = xr.concat(
+        myAnomalyXR = xarray.concat(
             [self.subset.sel(time=t) - myMean for t in self.subset.time],
             dim='time', join='override', combine_attrs='drop')
         # fix coordinate order
@@ -1463,7 +1472,7 @@ class nisarBase2D():
             if 'proj' in x or 'raster' in x:
                 self.subset = self.subset.drop(x, dim=None)
         #
-        self.subset.to_netcdf(path=cdfFile)
+        self.subset.to_netcdf(path=cdfFile, mode='w')
         return cdfFile
 
     def tiffFileName(self, tiffRoot, myVar):
@@ -1527,7 +1536,6 @@ class nisarBase2D():
         # Interpolate
         result = self.interp(x, y, returnXR=True, sourceEPSG=sourceEPSG,
                              units=units).sel(band=band)
-        #print(result)
         # Plot result
         ax.plot(result.time, np.squeeze(result), *argv, **kwargs)
         return ax
@@ -1590,3 +1598,59 @@ class nisarBase2D():
         # Plot result
         ax.plot(distance, result, label=label, *argv, **kwargs)
         return ax
+
+    def _removeNoData(self, t, v, band):
+        ''' processs np array to remove no data and return as lists. If
+        all no data return original'''
+        if np.isnan(self.noDataDict[band]):
+            keep = np.isfinite(v)
+        else:
+            keep = v > self.noDataDict[band]
+        # Save valid values
+        if len(keep) > 0:
+            v = v[keep]
+            t = t[keep]
+        return list(t), list(v)
+
+    def _extractData(self, x, y, band=None, plotOptions=None, units='m',
+                     **kwargs):
+        ''' Plot the time series, filtering out no data values '''
+        dtf = DatetimeTickFormatter(years="%Y")
+        # Get data
+        result = self.interp(x, y, units=units, returnXR=True)
+        vOrig = result.sel(band=band).values.flatten()
+        tOrig = self.subset.time.values.flatten()
+        t, v = self._removeNoData(tOrig, vOrig, band)
+        # Plot points and lines- options need some work
+        return hv.Curve((t, v)).opts(**plotOptions) * \
+            hv.Scatter((t, v)).opts(color='red', size=4, framewise=True,
+                                    xformatter=dtf, **plotOptions)
+
+    def _view(self, band, imgOptions, plotOptions, ncols=2, date=None,
+              markerColor='red', **kwargs):
+        ''' Setup and return plot '''
+        # Setup the image plot.
+        if date is None:
+            date = self.subset.time[-1]
+        img = self.subset.sel(band=band).sel(time=date, method='nearest')
+        imgDate = self.datetime64ToDatetime(
+            np.datetime64(img.time.item(0), 'ns')).strftime('%Y-%m-%d')
+        if 'title' not in imgOptions:
+            imgOptions['title'] = f'{band} for {imgDate} '
+        imgPlot = img.hvplot.image(rasterize=True, aspect='equal').opts(
+            active_tools=['point_draw'], max_width=500, min_width=300,
+            max_height=800, **imgOptions)
+        # Setup up the time series plot
+        xc = self.x0 + self.sx * self.dx * 0.5
+        yc = self.y0 + self.sy * self.dy * 0.5
+        points = hv.Points(([xc], [yc])).opts(size=6, color=markerColor)
+        pointer = hv.streams.PointDraw(source=points,
+                                       data=points.columns(), num_objects=1)
+        # Create the dynamic map
+        pointer_dmap = hv.DynamicMap(
+            lambda data: self._extractData(data['x'][0], data['y'][0],
+                                           band=band, plotOptions=plotOptions),
+            streams=[pointer]).opts(width=500)
+        # Return the result for display
+        return pn.panel((imgPlot * points +
+                         pointer_dmap).cols(ncols).opts(merge_tools=False))
