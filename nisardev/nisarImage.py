@@ -232,44 +232,93 @@ class nisarImage(nisarBase2D):
     # ---- Ploting routines.
     #
 
-    def displayImage(self, ax=None,
-                     plotFontSize=plotFontSize,
-                     titleFontSize=titleFontSize,
-                     labelFontSize=labelFontSize,
-                     axisOff=False, midDate=True,  colorBar=True,
-                     vmin=None, vmax=None, percentile=100, cmap='gray',
-                     colorBarPosition='right', colorBarSize='5%',
+    def displayImage(self, date=None,
+                     ax=None,
+                     vmin=None,
+                     vmax=None,
+                     percentile=100,
+                     autoScale=True,
+                     units='m',
+                     title=None,
+                     cmap='gray',
+                     plotFontSize=13,
+                     titleFontSize=16,
+                     labelFontSize=15,
+                     fontScale=1,
+                     axisOff=False,
+                     midDate=True,
+                     colorBar=True,
+                     colorBarPosition='right',
+                     colorBarLabel=None,
+                     colorBarSize='5%',
                      colorBarPad=0.05,
+                     backgroundColor=(1, 1, 1),
+                     wrap=None,
+                     masked=None,
+                     extend=None,
                      **kwargs):
         '''
-        Use matplotlib to show velocity in a single subplot with a color
-        bar. Clip to absolute max set by maxv, though in practives percentile
-        will clip at a signficantly lower value.
+         Use matplotlib to show a image layer selected by date.
+         Clip to absolute max set by maxv, though in practives percentile
+         will clip at a signficantly lower value.
+
         Parameters
         ----------
+        date : str or datetime
+            Approximate date to plot (nearest selected).
         ax : matplotlib axis, optional
             axes for plot. The default is None.
-        band : str, optional
-            band to plot (any of loaded variables). The default is 'vv'.
-        plotFontSize : int, optional
-            Font size for plot. The default is plotFontSize.
-        titleFontSize : TYPE, optional
-            Font size for title. The default is titleFontSize.
-        labelFontSize : TYPE, optional
-            Font size for labels. The default is labelFontSize.
-        axisOff : TYPE, optional
-            Turn axes off. The default is False.
-        vmax : number, optional
-            max velocity to display. The default is 7000.
         vmin : number, optional
-            min velocity to display. The default is 0.
+            min value to display. None -> default to type specific (dB/DN).
+        vmax : number, optional
+            min value to display. None -> default to type specific (dB/DN).
         percentile : number, optional
             percentile to clip display at. The default is 100
+        units : str, optional
+            units of coordiinates (m or km). The default is 'm'.
+        autoScale : bool, optional
+            Autoscale plot range,but not exceed vmin,vmax. The default is True.
+        title : str, optional
+            Plot title, use for '' for no title. A value of None defaults to
+            the image date.
+        plotFontSize : int, optional
+            Font size for plot. The default is 13.
+        titleFontSize : int, optional
+            Font size for title. The default is 16.
+        labelFontSize : int, optional
+            Font size for labels. The default is 15.
+        fontScale : float, optional
+            Scale factor to apply to label, title, and plot fontsizes (e.g.,
+            1.2 would increase by 20%). The default is 1.
+        axisOff : TYPE, optional
+            Turn axes off. The default is False.
+        midDate : Boolean, optional
+            Use middle date for titel. The default is True.
+        colorBarLabel : str, optional
+            Label for colorbar. The default is 'Speed (m/yr)'.
+        colorBarPosition : TYPE, optional
+            Color bar position (e.g., left, top...). The default is 'right'.
+        colorBarSize : str, optional
+            Color bar size specfied as 'n%'. The default is '5%'.
+        colorBarPad : float, optional
+            Color bar pad. The default is 0.05.
+        wrap : float, optional
+            Display data modulo wrap. The default is None.
+        extend : str, optional
+            Colorbar extend ('both','min', 'max', 'neither').
+            The default is None.
+        backgroundColor : color, optional
+            Background color. The default is (1, 1, 1).
+        wrap :  number, optional
+             Display velocity modululo wrap value
+        masked : Boolean, optional
+            Masked for imshow. The default is None.
         **kwargs : dict
             kwargs passed to imshow.
         Returns
         -------
         None.
+
         '''
         # Compute display bounds
         band = self.variables[0]
@@ -281,15 +330,31 @@ class nisarImage(nisarBase2D):
         vmin, vmax = self.autoScaleRange(band, None, vmin, vmax, percentile,
                                          quantize=1.)
         # Display data
-        cLabel = {'image': 'DN', 'gamma0': '$\\gamma_o$ (dB)',
-                  'sigma0': '$\\sigma_o$ (dB)'}[band]
-        self.displayVar(band, ax=ax, plotFontSize=self.plotFontSize,
-                        labelFontSize=self.labelFontSize, midDate=midDate,
-                        colorBarLabel=cLabel, vmax=vmax, vmin=vmin,
-                        scale='linear', cmap=cmap,
-                        axisOff=axisOff, colorBar=colorBar,
+        colorBarLabel = {'image': 'DN', 'gamma0': '$\\gamma_o$ (dB)',
+                         'sigma0': '$\\sigma_o$ (dB)'}[band]
+        self.displayVar(band,
+                        date=date,
+                        ax=ax,
+                        vmin=vmin,
+                        vmax=vmax,
+                        units=units,
+                        title=title,
+                        cmap=cmap,
+                        plotFontSize=plotFontSize,
+                        labelFontSize=labelFontSize,
+                        titleFontSize=titleFontSize,
+                        fontScale=fontScale,
+                        midDate=midDate,
+                        axisOff=axisOff,
+                        colorBar=colorBar,
+                        colorBarLabel=colorBarLabel,
+                        colorBarPad=colorBarPad,
+                        colorBarSize=colorBarSize,
                         colorBarPosition=colorBarPosition,
-                        colorBarSize=colorBarSize, colorBarPad=colorBarPad,
+                        extend=extend,
+                        backgroundColor=backgroundColor,
+                        wrap=wrap,
+                        masked=masked,
                         **kwargs)
 
     def plotPoint(self, x, y, *args, band=None, ax=None, **kwargs):

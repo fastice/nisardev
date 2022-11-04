@@ -1005,7 +1005,8 @@ class nisarBase2D():
                                    pad=colorBarPad)
 
     def _colorBar(self, pos, ax, colorBarLabel, colorBarPosition, colorBarSize,
-                  colorBarPad, labelFontSize, plotFontSize, extend='max'):
+                  colorBarPad, labelFontSize, plotFontSize, extend='max',
+                  fontScale=1):
         '''
         Color bar for image
         '''
@@ -1020,8 +1021,8 @@ class nisarBase2D():
 
         cb = plt.colorbar(pos, cax=cbAx, orientation=orientation,
                           extend=extend)
-        cb.set_label(colorBarLabel, size=labelFontSize)
-        cb.ax.tick_params(labelsize=plotFontSize)
+        cb.set_label(colorBarLabel, size=labelFontSize * fontScale)
+        cb.ax.tick_params(labelsize=plotFontSize * fontScale)
         if colorBarPosition in ['right', 'left']:
             cbAx.yaxis.set_ticks_position(colorBarPosition)
             cbAx.yaxis.set_label_position(colorBarPosition)
@@ -1146,12 +1147,24 @@ class nisarBase2D():
 
     def displayVar(self, band, date=None, ax=None, title=None,
                    colorBar=True,
-                   labelFontSize=15, titleFontSize=16, plotFontSize=13,
+                   labelFontSize=15,
+                   titleFontSize=16,
+                   plotFontSize=13,
+                   fontScale=1,
                    axisOff=False,
-                   vmin=0, vmax=7000, units='m', scale='linear', cmap=None,
-                   midDate=True, colorBarLabel='Speed (m/yr)',
-                   masked=None, colorBarPosition='right', colorBarSize='5%',
-                   colorBarPad=0.05, wrap=None, extend=None,
+                   vmin=0,
+                   vmax=7000,
+                   units='m',
+                   scale='linear',
+                   cmap=None,
+                   midDate=True,
+                   colorBarLabel='Speed (m/yr)',
+                   colorBarPosition='right',
+                   colorBarSize='5%',
+                   colorBarPad=0.05,
+                   wrap=None,
+                   masked=None,
+                   extend=None,
                    backgroundColor=(1, 1, 1),
                    **kwargs):
         '''
@@ -1196,8 +1209,6 @@ class nisarBase2D():
             Use middle date for titel. The default is True.
         colorBarLabel : str, optional
             Label for colorbar. The default is 'Speed (m/yr)'.
-        masked : Boolean, optional
-            Masked for imshow. The default is None.
         colorBarPosition : TYPE, optional
             Color bar position (e.g., left, top...). The default is 'right'.
         colorBarSize : str, optional
@@ -1206,8 +1217,11 @@ class nisarBase2D():
             Color bar pad. The default is 0.05.
         wrap : float, optional
             Display data modulo wrap. The default is None.
+        masked : Boolean, optional
+            Masked for imshow. The default is None.
         extend : str, optional
-            Colorbar extend ('both','min', 'max'). The default is None.
+            Colorbar extend ('both','min', 'max', 'neither').
+            The default is None.
         backgroundColor : color, optional
             Background color. The default is (1, 1, 1).
         **kwargs : dict
@@ -1258,11 +1272,11 @@ class nisarBase2D():
         self._labelAxes(ax, f'x ({units})',  f'y ({units})',
                         labelFontSize=labelFontSize,
                         titleFontSize=titleFontSize, plotFontSize=plotFontSize,
-                        axisOff=axisOff, title=title)
+                        axisOff=axisOff, title=title, fontScale=fontScale)
         if colorBar:
             self._colorBar(pos, ax, colorBarLabel, colorBarPosition,
                            colorBarSize, colorBarPad, labelFontSize,
-                           plotFontSize, extend=extend)
+                           plotFontSize, extend=extend, fontScale=fontScale)
 
         return pos
 
