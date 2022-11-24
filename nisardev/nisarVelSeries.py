@@ -292,7 +292,9 @@ class nisarVelSeries(nisarBase2D):
     # Ploting routines.
     # ------------------------------------------------------------------------
 
-    def displayVelForDate(self, date=None, ax=None, band='vv',
+    def displayVelForDate(self, date=None,
+                          ax=None,
+                          band='vv',
                           vmin=0,
                           vmax=7000,
                           percentile=100,

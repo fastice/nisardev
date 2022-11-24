@@ -117,7 +117,8 @@ class nisarImage(nisarBase2D):
 
     def readDataFromTiff(self, fileNameBase, url=False, useStack=True,
                          dateFormat='%d%b%y', index1=3, index2=4,
-                         overviewLevel=-1, suffix='', chunkSize=1024):
+                         overviewLevel=-1, suffix='', chunkSize=1024, 
+                         date1=None, date2=None):
         '''
         read in a tiff product fileNameBase.*[,tif], tif ext optional.
         Files can be read as np arrays of xarrays (useXR=True, not well tested)
@@ -140,6 +141,10 @@ class nisarImage(nisarBase2D):
             Any suffix that needs to be appended (e.g., for dropbox links)
         chunkSize : int, optional
             Chunksize for xarray. Default is 1024.
+        date1 : "YYYY-MM-DD" or datetime
+            First date. Default is None, which parses date from filename.
+        date2 : "YYYY-MM-DD" or datetime
+            Second date. Default is None, which parses date from filename.
         Returns
         -------
         None.
@@ -148,8 +153,10 @@ class nisarImage(nisarBase2D):
         fileNameBase = fileNameBase.replace('.tif', '')
         if self.imageType is None:
             self.detectImageType(fileNameBase)
+        #
         self.parseImageDatesFromFileName(fileNameBase,
-                                         index1=index1, index2=index2)
+                                         index1=index1, index2=index2,
+                                         date1=date1, date2=date2)
         self.variables = self.myVariables(self.imageType)
         #
         if 'image' in self.variables:
@@ -204,7 +211,8 @@ class nisarImage(nisarBase2D):
     #
 
     def parseImageDatesFromFileName(self, fileNameBase, index1=3, index2=4,
-                                    dateFormat='%d%b%y'):
+                                    dateFormat='%d%b%y', 
+                                    date1=None, date2=None):
         '''
         Parse the dates from the directory name the image products are
         stored in.
@@ -216,14 +224,24 @@ class nisarImage(nisarBase2D):
             location of dates in filename with seperated by _
         dateFormat : str, optional
             format code to strptime
+        date1 : "YYYY-MM-DD" or datetime
+            First date. Default is None, which parses date from filename.
+        date2 : "YYYY-MM-DD" or datetime
+            Second date. Default is None, which parses date from filename.
         Returns
         -------
         date: mid date.
             First and last dates from meta file.
         '''
         baseNamePieces = os.path.basename(fileNameBase).split('_')
-        self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
-        self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
+        if date1 is None:
+            self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
+        else:
+            self.date1 = self.parseDate(date1)
+        if date1 is None:
+            self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
+        else:
+            self.date2 = self.parseDate(date2)
         self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
         #
         return self.midDate

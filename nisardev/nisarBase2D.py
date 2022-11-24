@@ -430,7 +430,7 @@ class nisarBase2D():
 
         Parameters
         ----------
-        date1 : Tdatetime or "YYYY-MM-DD"
+        date1 : datetime or "YYYY-MM-DD"
             First date in range.
         date2 : TYPE
             Second date in range.
@@ -978,14 +978,14 @@ class nisarBase2D():
         -------
         vmin, vmap - updated values based on percentiles.
         '''
-        # compute max
+        # select band by date
         date = self.parseDate(date)
         if date is not None:
             myVar = self.subset.sel(time=date,
                                     method='nearest').sel(band=band).data
         else:
             myVar = self.subset.sel(band=band).data
-        #
+        # compute max
         maxVel = min(np.percentile(myVar[np.isfinite(myVar)], percentile),
                      vmax)
         #
