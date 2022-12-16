@@ -627,7 +627,7 @@ class cvPoints:
             lat and lon of zero CVs.
         '''
         iZero = self.zeroCVs()
-        return self.lat(iZero), self.lat(iZero)
+        return self.lat[iZero], self.lon[iZero]
 
     def _toKM(self, x, y):
         return x/1000., y/1000.

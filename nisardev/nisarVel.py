@@ -358,65 +358,134 @@ class nisarVel(nisarBase2D):
     # Ploting routines.
     # ------------------------------------------------------------------------
 
-    def displayVel(self, ax=None, band='vv',
-                   plotFontSize=plotFontSize,
-                   titleFontSize=titleFontSize,
-                   labelFontSize=labelFontSize,  colorBar=True,
-                   scale='linear', axisOff=False, midDate=True,
-                   vmin=0, vmax=7000, percentile=100, wrap=None, extend=None,
+    def displayVel(self,
+                   ax=None,
+                   band='vv',
+                   vmin=0,
+                   vmax=7000,
+                   percentile=100,
+                   autoScale=True,
+                   units='m',
+                   title=None,
+                   plotFontSize=13,
+                   titleFontSize=16,
+                   labelFontSize=15,
+                   fontScale=1.,
+                   scale='linear',
+                   axisOff=False,
+                   midDate=True,
+                   colorBar=True,
+                   colorBarPosition='right',
+                   colorBarLabel='Speed (m/yr)',
+                   colorBarSize='5%',
+                   colorBarPad=0.05,
+                   wrap=None,
+                   masked=None,
+                   backgroundColor=(1, 1, 1),
+                   extend=None,
                    **kwargs):
         '''
-        Use matplotlib to show velocity in a single subplot with a color
-        bar. Clip to absolute max set by maxv, though in practives percentile
-        will clip at a signficantly lower value.
+         Use matplotlib to show a velocity layer selected by date.
+         Clip to absolute max set by maxv, though in practives percentile
+         will clip at a signficantly lower value.
+
         Parameters
         ----------
+        date : str or datetime
+            Approximate date to plot (nearest selected).
         ax : matplotlib axis, optional
             axes for plot. The default is None.
         band : str, optional
-            band to plot (any of loaded variables). The default is 'vv'.
-        plotFontSize : int, optional
-            Font size for plot. The default is plotFontSize.
-        titleFontSize : TYPE, optional
-            Font size for title. The default is titleFontSize.
-        labelFontSize : TYPE, optional
-            Font size for labels. The default is labelFontSize.
-        scale : str, optional
-            Options are "linear" and "log" The default is linear.
-        axisOff : TYPE, optional
-            Turn axes off. The default is False.
-        vmax : number, optional
-            max velocity to display. The default is 7000.
+            component to plot (any of loaded variables). The default is 'vv'.\
         vmin : number, optional
             min velocity to display. The default is 0.
+        vmax : number, optional
+            max velocity to display. The default is 7000.
         percentile : number, optional
             percentile to clip display at. The default is 100
+        autoScale : bool, optional
+            Autoscale plot range,but not exceed vmin,vmax. The default is True.
+        units : str, optional
+            units of coordiinates (m or km). The default is 'm'.
+        title : str, optional
+            Plot title, use for '' for no title. A value of None defaults to
+            the image date.
+        plotFontSize : int, optional
+            Font size for plot. The default is 13.
+        titleFontSize : int, optional
+            Font size for title. The default is 16.
+        labelFontSize : int, optional
+            Font size for labels. The default is 15.
+        fontScale : float, optional
+            Scale factor to apply to label, title, and plot fontsizes (e.g.,
+            1.2 would increase by 20%). The default is 1 .
+        scale : str, optional
+            Scale type ('linear' or 'log') The default is 'linear'.
+        axisOff : TYPE, optional
+            Turn axes off. The default is False.
+        midDate : Boolean, optional
+            Use middle date for titel. The default is True.
+        colorBarLabel : str, optional
+            Label for colorbar. The default is 'Speed (m/yr)'.
+        colorBarPosition : TYPE, optional
+            Color bar position (e.g., left, top...). The default is 'right'.
+        colorBarSize : str, optional
+            Color bar size specfied as 'n%'. The default is '5%'.
+        colorBarPad : float, optional
+            Color bar pad. The default is 0.05.
+        wrap : float, optional
+            Display data modulo wrap. The default is None.
+        extend : str, optional
+            Colorbar extend ('both','min', 'max', 'neither').
+            The default is None.
+        backgroundColor : color, optional
+            Background color. The default is (1, 1, 1).
         wrap :  number, optional
-            Display velocity modululo wrap value
+             Display velocity modululo wrap value
+        masked : Boolean, optional
+            Masked for imshow. The default is None.
         **kwargs : dict
             kwargs passed to imshow.
         Returns
         -------
-        None.
+        pos : matplotlib.image.AxesImage
+            return value from imshow.
+
         '''
         # Compute display bounds
         if scale == 'linear':
             # clip to percentile value
-            vmin, vmax = self.autoScaleRange(band, None, vmin, vmax,
-                                             percentile)
+            if autoScale:
+                vmin, vmax = self.autoScaleRange(band, None, vmin, vmax,
+                                                 percentile)
         elif scale == 'log':
             vmin = max(.1, vmin)  # Don't allow too small a value
         else:
             print('Invalid scale option, use linear or log')
             return
         # Display data
-        return self.displayVar(band, ax=ax, plotFontSize=self.plotFontSize,
-                               labelFontSize=self.labelFontSize,
+        return self.displayVar(band, ax=ax,
+                               vmin=vmin,
+                               vmax=vmax,
+                               units=units,
+                               title=title,
+                               plotFontSize=plotFontSize,
+                               labelFontSize=labelFontSize,
+                               titleFontSize=titleFontSize,
+                               fontScale=fontScale,
+                               scale=scale,
                                midDate=midDate,
-                               colorBarLabel='Speed (m/yr)',
-                               vmax=vmax, vmin=vmin,
-                               axisOff=axisOff, colorBar=colorBar,
-                               scale=scale, wrap=wrap, **kwargs)
+                               axisOff=axisOff,
+                               colorBar=colorBar,
+                               colorBarLabel=colorBarLabel,
+                               colorBarPad=colorBarPad,
+                               colorBarSize=colorBarSize,
+                               colorBarPosition=colorBarPosition,
+                               extend=extend,
+                               backgroundColor=backgroundColor,
+                               wrap=wrap,
+                               masked=masked,
+                               **kwargs)
 
     def plotPoint(self, x, y, *args, band='vv', ax=None, **kwargs):
         '''

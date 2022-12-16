@@ -1229,8 +1229,8 @@ class nisarBase2D():
 
         Returns
         -------
-        pos : TYPE
-            DESCRIPTION.
+        pos : matplotlib.image.AxesImage
+            return value from imshow.
         '''
         if not self._checkUnits(units):
             return

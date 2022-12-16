@@ -381,7 +381,8 @@ class nisarVelSeries(nisarBase2D):
             kwargs passed to imshow.
         Returns
         -------
-        None.
+        pos : matplotlib.image.AxesImage
+            return value from imshow.
 
         '''
         # Compute auto scale params
