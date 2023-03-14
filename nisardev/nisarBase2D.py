@@ -67,12 +67,12 @@ class nisarBase2D():
 
     @abstractmethod
     def plotPoint():
-        ''' Abstract interpolation method - define in child class. '''
+        ''' Abstract pointPlot method - define in child class. '''
         pass
 
     @abstractmethod
     def plotProfile():
-        ''' Abstract interpolation method - define in child class. '''
+        ''' Abstract plotProfile method - define in child class. '''
         pass
 
     @abstractmethod
@@ -194,12 +194,34 @@ class nisarBase2D():
         # Save variables to (self.vx, self.vy)
         self._mapVariables()
 
+    def copy(self):
+        '''
+        Create a deep copy of current instance.
+        Returns
+        -------
+        Copy (deep) of itself
+        '''
+        # Make an empty instance
+        new = self.reproduce()
+        # Deep copy the xr
+        newXR = self.xr.copy(deep=True)
+        new.initXR(newXR)
+        # Get the bouding box and subset
+        bbox = self._xrBoundingBox(self.subset)
+        new.subSetData(bbox)
+        # If the data have already been loaded, force a reload.
+        if self.subset.chunks is None:
+            new.subset.load()
+            new._mapVariables()  # Forces remapping to non dask
+        new._getTimes()
+        return new
+
     def _mapVariables(self):
         ''' Map the xr variables to band variables (e.g., 'vx' -> self.vx) '''
         # Map variables
-        for myVar in self.subset.band.data:
+        for myVar in self.xr.band.data:
             myVar = str(myVar)
-            bandData = np.squeeze(self.subset.sel(band=myVar).data)
+            bandData = np.squeeze(self.xr.sel(band=myVar).data)
             setattr(self, myVar, bandData)
 
     def _parseGeoInfoStack(self):
@@ -450,6 +472,11 @@ class nisarBase2D():
         # Get current bounding box and subset
         bbox = self._xrBoundingBox(self.subset)
         newSubset.subSetData(bbox)
+        #
+        # If existing subset has been loaded, load the new subset
+        if self.subset.chunks is None:
+            newSubset.subset.load()
+            newSubset._mapVariables()
         # Return result
         return newSubset
 
@@ -464,22 +491,24 @@ class nisarBase2D():
                 setattr(self, time, [self.datetime64ToDatetime(x)
                                      for x in getattr(self.xr, time).data])
 
-    def _setBandOrder(self, bandOrder):
+    def _setBandOrder(self, bandOrder, myXR=None):
         '''
         Ensure band order is correct
         Returns
         -------
-        None.
+        reordered xr.
         '''
+        if myXR is None:
+            myXR = self.xr
         bandOrderList = []
         # Create list for sort
-        for b in self.xr.band:
+        for b in myXR.band:
             bandOrderList.append(bandOrder[b.item()])
         # creete array for sort
-        myOrderXR = xarray.DataArray(bandOrderList, coords=[self.xr['band']],
+        myOrderXR = xarray.DataArray(bandOrderList, coords=[myXR['band']],
                                      dims='band')
         # do sort
-        self.xr = self.xr.sortby(myOrderXR)
+        return myXR.sortby(myOrderXR)
 
     #
     # ---- def setup xy coordinates
@@ -591,8 +620,8 @@ class nisarBase2D():
             return False
         return True
 
-    def interpGeo(self, x, y, myVars, date=None, returnXR=False, units='m',
-                  **kwargs):
+    def interpGeo(self, x, y, myVars, date=None, returnXR=False, grid=False,
+                  units='m', **kwargs):
         '''
         Call appropriate interpolation method for each variable specified by
         myVars
@@ -604,6 +633,11 @@ class nisarBase2D():
             y coordinates in m to interpolate to.
         myVars : list of str
             list of variable names as strings, e.g. ['vx',...].
+        grid : boolean, optional
+            If false, interpolate at x, y values. If true create grid with
+            x and y 1-d arrays for each dimension. The default is False.
+        units : str ('m' or 'km'), optional
+            Units. The default is 'm'.
         **kwargs : TBD
             keywords passed through to interpolator.
         Returns
@@ -614,6 +648,7 @@ class nisarBase2D():
         if not self._checkUnits(units):
             return
         return self._interpNP(x, y, myVars, date=date, returnXR=returnXR,
+                              grid=grid,
                               units=units, **kwargs)
 
     def _convertCoordinates(func):
@@ -673,7 +708,7 @@ class nisarBase2D():
         return convertCoordsInner
 
     @_convertCoordinates
-    def _interpNP(self, x, y, myVars, date=None, returnXR=False):
+    def _interpNP(self, x, y, myVars, date=None, grid=False, returnXR=False):
         '''
         Interpolate myVar(y,x) specified myVars (e.g., ['vx'..]) where myVars
         are nparrays. Linear interpolation in space and nearest neighbor in
@@ -688,6 +723,9 @@ class nisarBase2D():
             list of variable names as strings, e.g. ['vx',...].
         date: str (YYYY-mm-dd), or datetime optional
             Interpolate for data nearest date, None returns all times
+        grid : boolean, optional
+            If false, interpolate at x, y values. If true create grid with
+            x and y 1-d arrays for each dimension. The default is False.
         units : str, optional
                 Input units. The default is 'm'.
         sourceEPSG : str or int, optional
@@ -700,7 +738,10 @@ class nisarBase2D():
         '''
         if np.isscalar(x):
             x, y = [x], [y]
-        xx1, yy1 = xarray.DataArray(x), xarray.DataArray(y)
+        elif not grid:
+            xx1, yy1 = xarray.DataArray(x), xarray.DataArray(y)
+        else:
+            xx1, yy1 = x, y
         myXR = self.subset
         # Array to receive results
         date = self.parseDate(date, defaultDate=False)
@@ -708,7 +749,7 @@ class nisarBase2D():
             myXR = self.subset.sel(time=date, method='nearest')
         #
         result = myXR.interp(x=xx1, y=yy1)
-        if date is None:
+        if date is None and not grid:
             result = result.transpose('band', 'time', 'dim_0')
         if returnXR:
             return result
@@ -777,8 +818,9 @@ class nisarBase2D():
             else:
                 result.time1 = inst.time1[0]
                 result.time2 = inst.time2[-1]
-            result.time = [inst.datetime64ToDatetime(x) for x in
-                           myXR.time.data]
+            result._getTimes()
+            # result.time = [inst.datetime64ToDatetime(x) for x in
+            #               myXR.time.data]
             return result
         return _applyInTimeInner
 
@@ -796,7 +838,7 @@ class nisarBase2D():
         return myAnomalyXR
 
     @_applyInTime
-    def mean(self, skipna=True):
+    def mean(self, skipna=True, errors=[]):
         '''
         Compute mean along time axis and return new instance of same class
         Note that the original xr and subset correspond to the subset
@@ -812,7 +854,27 @@ class nisarBase2D():
             Object with mean and time axis reduced to dimension of 1.
 
         '''
-        return self.subset.mean(dim='time', skipna=skipna)
+        #
+        # If bands to compute errors for mean do so
+        if len(errors) > 0:
+            # Regular mean
+            noErrorBands = [x for x in self.variables if x not in errors]
+            meanNoErrors = self.subset.sel(
+                band=noErrorBands).mean(dim='time', skipna=skipna)
+            # errors sqrt(mean(sigma**2)/N)
+            squaredErrors = (self.subset.sel(band=errors)**2)
+            N = self.numberValid().subset.sel(band=errors)
+            meanSqErrors = np.sqrt(squaredErrors.mean(dim='time') / N)
+            myMean = np.squeeze(xarray.concat([meanNoErrors, meanSqErrors],
+                                              dim='band',
+                                              join='override',
+                                              combine_attrs='drop'))
+            # Make sure band order not scrambled
+            bands = self.subset.band.data
+            bandOrder = dict(zip(bands, np.arange(0, len(bands))))
+            return self._setBandOrder(bandOrder, myMean)
+        else:
+            return self.subset.mean(dim='time', skipna=skipna)
 
     @_applyInTime
     def stdev(self, skipna=True):
@@ -1428,7 +1490,8 @@ class nisarBase2D():
     # ---- Output results
     #
 
-    def writeCloudOptGeo(self, tiffRoot, full=False, myVars=None, **kwargs):
+    def writeCloudOptGeo(self, tiffRoot, full=False, myVars=None, myXR=None,
+                         **kwargs):
         '''
         Write a cloud optimized geotiff(s) with overviews if requested.
         By default writes all bands to indiviual files.
@@ -1449,19 +1512,51 @@ class nisarBase2D():
         '''
         # variables to write
         if myVars is None:
-            myVars is self.myVars
+            myVars = self.variables
         else:
             if type(myVars) is str:  # Ensure its a str
                 myVars = [myVars]
         # By default write subset unless none exists or full flagged
-        if full or self.subset is None:
-            myXR = self.xr
-        else:
-            myXR = self.subset
-        for myVar, band in zip(self.myVars, myXR):
-            if myVar in myVars:
-                band.rio.to_raster(self.tiffFileName(tiffRoot, myVar),
-                                   **kwargs)
+        if myXR is None:
+            if full or self.subset is None:
+                myXR = self.xr
+            else:
+                myXR = self.subset
+        # Loop to write bands
+        for band in myVars:
+            # map np.nan to nodata value
+            myBand = myXR.sel(
+                    band=band).rio.write_nodata(self.noDataDict[band],
+                                                encoded=True)
+            #
+            myBand.rio.to_raster(self.tiffFileName(tiffRoot, band), **kwargs)
+
+    def writeSeriesToCOG(self, baseName, dateFormat='%d%b%y', suffix='V'):
+        '''
+        Write series as a sequence of geotiffs with format with
+        baseName_date1_date2_band_suffix_band.tif
+
+        Parameters
+        ----------
+        baseName : str
+            First part of file name.
+        dateFormat : str, optional
+            Format for date strings in name. The default is '%b%d%Y'.
+        Returns
+        -------
+        None.
+
+        '''
+        for time, date1, date2 in zip(self.time, self.time1, self.time2):
+            if isinstance(date1, datetime):
+                date1 = date1.strftime(dateFormat)
+                if isinstance(date2, datetime):
+                    date2 = date2.strftime(dateFormat)
+        #
+            tiffRoot = f'{baseName}_{date1}_{date2}_*_{suffix}'
+            print(tiffRoot)
+            subset = self.subset.sel(time=time)
+            self.writeCloudOptGeo(tiffRoot, myXR=subset, myVars=self.variables)
 
     def toNetCDF(self, cdfFile):
         ''' Write existing working xarray to file. If a subset exists it will
@@ -1668,3 +1763,6 @@ class nisarBase2D():
         # Return the result for display
         return pn.panel((imgPlot * points +
                          pointer_dmap).cols(ncols).opts(merge_tools=False))
+
+
+

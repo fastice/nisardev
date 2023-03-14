@@ -50,7 +50,7 @@ class nisarVel(nisarBase2D):
         self.variables = None
         self.verbose = verbose
         self.noDataDict = {'vx': -2.0e9, 'vy': -2.0e9, 'vv': -1.0,
-                           'ex': -1.0, 'ey': -1.0, 'dT': -2.e9}
+                           'ex': -1.0, 'ey': -1.0, 'ev': -1.0, 'dT': -2.e9}
         self.gdalType = gdal.GDT_Float32  # data type for velocity products
         self.dtype = 'float32'
 
@@ -83,6 +83,10 @@ class nisarVel(nisarBase2D):
         self.variables = myVars
         return myVars
 
+    @classmethod
+    def reproduce(cls):
+        ''' Create and return a new instance of velocitySeries '''
+        return cls()
     # ------------------------------------------------------------------------
     # Interpolation routines - to populate abstract methods from nisarBase2D
     # ------------------------------------------------------------------------
@@ -109,26 +113,37 @@ class nisarVel(nisarBase2D):
     # I/O Routines
     # ------------------------------------------------------------------------
 
-    def _addSpeed(self):
+    def _addSpeed(self, bandType='v'):
         ''' Add speed if only have vx and vy '''
         # Compute speed
-        dv = xr.DataArray(np.sqrt(np.square(self.vx) + np.square(self.vy)),
-                          coords=[self.xr.y, self.xr.x], dims=['y', 'x'])
+        band = f'{bandType}v'
+
+        if bandType == 'v':
+            wx, wy = 1., 1.,
+        elif bandType == 'e':
+            wx = self.vx / self.vv
+            wy = self.vy / self.vv
+        else:
+            print('_addSpeed: Invalid band type')
+        dv = xr.DataArray(
+            np.sqrt(np.square(wx * getattr(self, f'{bandType}x')) +
+                    np.square(wy * getattr(self, f'{bandType}y'))),
+            coords=[self.xr.y, self.xr.x], dims=['y', 'x'])
         # setup band as vv
         dv = dv.expand_dims(dim=['time', 'band'])
-        dv['band'] = ['vv']
+        dv['band'] = [band]
         dv['time'] = self.xr['time']
         dv['name'] = self.xr['name']
-        dv['_FillValue'] = self.noDataDict['vv']
+        dv['_FillValue'] = self.noDataDict[band]
         # Add to existing xr with vx and vy
         self.xr = xr.concat([self.xr, dv], dim='band', join='override',
                             combine_attrs='drop')
         # Fix order of coordinates - force vx, vy, vv, ex...
-        self._setBandOrder(
-            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'dT': 5})
+        self.xr = self._setBandOrder({'vx': 0, 'vy': 1, 'vv': 2,
+                            'ex': 3, 'ey': 4, 'ev': 5, 'dT': 6})
         #
-        if 'vv' not in self.variables:
-            self.variables.append('vv')
+        if band not in self.variables:
+            self.variables.append(band)
         self._mapVariables()
 
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
@@ -196,7 +211,9 @@ class nisarVel(nisarBase2D):
                     suffix=suffix, chunkSize=chunkSize)
         # compute speed rather than download
         if not readSpeed and useVelocity:
-            self._addSpeed()
+            self._addSpeed(bandType='v')
+        if useErrors:
+            self._addSpeed(bandType='e')
         #
         self.xr = self.xr.rename('VelocityMap')
         self.fileNameBase = fileNameBase  # save filenameBase
@@ -224,8 +241,8 @@ class nisarVel(nisarBase2D):
                 'vy' in self.variables:
             self._addSpeed()
             self.subset = self.xr
-        self._setBandOrder(
-             {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'dT': 5})
+        self.xr = self._setBandOrder(
+             {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'ev': 5, 'dT': 6})
         self.subset = self.xr
         # set times
         self.time = [np.datetime64(self.xr.time.item(), 'ns')]

@@ -1113,7 +1113,7 @@ class cvPoints:
         dvy nparray
             vy difference for good points.
         '''
-        vx, vy, vv = vel.interp(x, y, units=units, date=date)
+        vx, vy, vv = vel.interp(x, y, units=units, date=date)[0:3]
         # subtract cvpoint values args[0] is self
         dvx, dvy = vx - self.vx[iPts], vy - self.vy[iPts]
         # Return valid points and locations where good

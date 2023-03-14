@@ -14,6 +14,7 @@ from nisardev import nisarBase2D, nisarVel
 from osgeo import gdal
 import xarray as xr
 from dask.diagnostics import ProgressBar
+from datetime import datetime
 
 
 class nisarVelSeries(nisarBase2D):
@@ -75,7 +76,7 @@ class nisarVelSeries(nisarBase2D):
         if useVelocity:
             myVars += ['vx', 'vy', 'vv']
         if useErrors:
-            myVars += ['ex', 'ey']
+            myVars += ['ex', 'ey', 'ev']
         if useDT:
             myVars += ['dT']
         self.variables = myVars
@@ -85,26 +86,38 @@ class nisarVelSeries(nisarBase2D):
     # Interpolation routines - to populate abstract methods from nisarBase2D
     # ------------------------------------------------------------------------
 
-    def interp(self, x, y, date=None, units='m', returnXR=False, **kwargs):
+    def interp(self, x, y, date=None, units='m', returnXR=False, grid=False,
+               **kwargs):
         '''
         Call appropriate interpolation method to interpolate myVars at x, y
         points.
-
         Parameters
         ----------
         x : nparray
-            DESCRIPTION.
+            x coordinates.
         y : nparray
+            y coordinates.
+        date : datestr, optional
+            Interpolate layer nearest this date. The default is None.
+        units : str ('m' or 'km'), optional
+            Units. The default is 'm'.
+        returnXR : boolean, optional
+            Return result as xarray instead of nparray. The default is False.
+        grid : boolean, optional
+            If false, interpolate at x, y values. If true create grid with
+            x and y 1-d arrays for each dimension. The default is False.
+        **kwargs : TYPE
             DESCRIPTION.
         Returns
         -------
-        npArray
-            interpolate results for [nbands, npts].
+        npaarray or xarray
+            Interpolated result as nparray or xarray depending on returnXR.
         '''
+
         if not self._checkUnits(units):
             return
         return self.interpGeo(x, y, self.variables, date=date, units=units,
-                              returnXR=returnXR, **kwargs)
+                              grid=grid, returnXR=returnXR, **kwargs)
 
     def getMap(self, date, returnXR=False):
         '''
@@ -212,22 +225,34 @@ class nisarVelSeries(nisarBase2D):
         # Update times
         self._getTimes()
 
-    def _addSpeedSeries(self):
+    def _addSpeedSeries(self, bandType='v'):
         ''' Add speed if only have vx and vy '''
-        dv = xr.DataArray(np.sqrt(np.square(self.vx) + np.square(self.vy)),
+        band = f'{bandType}v'
+        #
+        if bandType == 'v':
+            wx, wy = 1., 1.,
+        elif bandType == 'e':
+            wx = self.vx / self.vv
+            wy = self.vy / self.vv
+        else:
+            print('_addSpeed: Invalid band type')
+        #
+        dv = xr.DataArray(np.sqrt(
+            np.square(wx * getattr(self, f'{bandType}x')) +
+            np.square(wy * getattr(self, f'{bandType}u'))),
                           coords=[self.xr.time, self.xr.y, self.xr.x],
                           dims=['time', 'y', 'x'])
         # add band for vv
         dv = dv.expand_dims(dim=['band'])
-        dv['band'] = ['vv']
+        dv['band'] = [band]
         dv['time'] = self.xr['time']
         dv['name'] = self.xr['name']
         # Add to vx, vy xr
         self.xr = xr.concat([self.xr, dv], dim='band', join='override',
                             combine_attrs='drop')
         #
-        if 'vv' not in self.variables:
-            self.variables.append('vv')
+        if band not in self.variables:
+            self.variables.append(band)
         self._mapVariables()
 
     def readSeriesFromNetCDF(self, cdfFile):
@@ -249,9 +274,10 @@ class nisarVelSeries(nisarBase2D):
         if 'vv' not in self.variables and 'vx' in self.variables and \
                 'vy' in self.variables:
             self._addSpeedSeries()
+
         # fix band order
-        self._setBandOrder(
-            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'dT': 5})
+        self.xr = self._setBandOrder(
+            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'ev': '5', 'dT': 5})
         self.subset = self.xr
         # get times
         self._getTimes()
@@ -270,6 +296,7 @@ class nisarVelSeries(nisarBase2D):
         series new velSeries
         '''
         newSeries = self.timeSliceData(date1, date2)
+        # self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
         # get times
         newSeries._getTimes()
         return newSeries
@@ -660,3 +687,29 @@ class nisarVelSeries(nisarBase2D):
             plotOpts['title'] = f'{band} time series'
 
         return self._view(band, imgOpts, plotOpts, date=date, markerColor='w')
+
+    def mean(self, skipna=True, squaredErrors=True):
+        '''
+        Compute mean along time axis and return new instance of same class
+        Note that the original xr and subset correspond to the subset
+        of the calling instance.
+        Parameters
+        ----------
+        skipna : bool, optional
+            Skips nans in computation. The default is True.
+        skipna : bool, optional
+            Computes mean sq errors to represet errors of other averaged
+            variables. The default is True.
+        Returns
+        -------
+        same as class method called from
+            Object with mean and time axis reduced to dimension of 1.
+
+        '''
+        if squaredErrors:
+            errors = [x for x in self.variables if x in ['ex', 'ey', 'ev']]
+        else:
+            errors = []
+        #
+        return nisarBase2D.mean(self, skipna=skipna, errors=errors)
+    #     return result

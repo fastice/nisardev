@@ -10,7 +10,7 @@ import numpy as np
 from nisardev import nisarBase2D
 import os
 from datetime import datetime
-from osgeo import gdal
+from osgeo import gdal_array
 
 imageTypes = ['image', 'sigma0', 'gamma0']
 
@@ -24,25 +24,50 @@ class nisarImage(nisarBase2D):
     legendFontSize = 12  # Font size for legends
     titleFontSize = 15  # Font size for legends
 
-    def __init__(self, verbose=True, imageType=None, numWorkers=2):
+    def __init__(self, imageType=None, verbose=True,
+                 noData=None, dtype=None, numWorkers=2):
         '''
-        Instantiate nisarVel object. Possible bands are 'vx', 'vy','v', 'ex',
-        'ey', 'e'
+        Instantiate nisarVel object. Possible bands are 'image', 'sigma0',
+        'gamma0', or user defined.
         Parameters
         ----------
+        imageType: str
+            imageType custom name, or image, sigma0, gamma0. If not specified
+            determined from grimp product name.
         verbose : bool, optional
             Increase level of informational messages. The default is True.
+        noData : scalar
+            no data value. Defaults to np.nan if not image/sigma/gamma
         Returns
         -------
         None.
         '''
         nisarBase2D.__init__(self, numWorkers=numWorkers)
-        self.image, self.sigma0, self.gamma0 = [None] * 3
+        # self.image, self.sigma0, self.gamma0 = [None] * 3
+        if type(imageType) is not str:
+            print('Warning invalid image type')
+            return None
+
+        #
+        if dtype is not None:
+            try:
+                np.dtype(dtype)
+            except Exception:
+                print(f'Invalid dtype {dtype}')
+                return None
         #
         self.myVariables(imageType)
+        setattr(self, imageType, [])
+        #
         self.imageType = imageType
         self.verbose = verbose
-        self.noDataDict = dict(zip(imageTypes, [0, -30., -30.]))
+        #
+        if imageType in imageTypes:
+            self.noDataDict = dict(zip(imageTypes, [0, -30., -30.]))
+        else:
+            if noData is None:
+                noData = np.nan
+            self.noDataDict = dict(zip([imageType], [noData]))
 
     def myVariables(self, imageType):
         '''
@@ -59,15 +84,21 @@ class nisarImage(nisarBase2D):
         '''
         if imageType is None:
             return
-        if imageType not in imageTypes:
-            print(f'Invalid Image Type: {imageType} must be {imageTypes}')
+        #if imageType not in imageTypes:
+        #    print(f'Invalid Image Type: {imageType} must be {imageTypes}')
         myVars = [imageType]
         self.variables = myVars
-        self.dtype = dict(zip(imageTypes,
-                              ['uint8', 'float32', 'float32']))[imageType]
-        self.gdalType = dict(zip(imageTypes,
-                             [gdal.GDT_Byte, gdal.GDT_Float32,
-                              gdal.GDT_Float32]))[imageType]
+        #
+        # Resolve dtype
+        if imageType in imageTypes and self.dtype is None:
+            self.dtype = dict(zip(imageTypes,
+                                  ['uint8', 'float32', 'float32']))[imageType]
+        else:
+            if self.dtype is None:
+                self.dtype = 'float32'  # Custom default
+        #
+        self.gdalType = gdal_array.NumericTypeCodeToGDALTypeCode(
+            np.dtype(self.dtype))
         return myVars
 
     # ------------------------------------------------------------------------
@@ -117,7 +148,7 @@ class nisarImage(nisarBase2D):
 
     def readDataFromTiff(self, fileNameBase, url=False, useStack=True,
                          dateFormat='%d%b%y', index1=3, index2=4,
-                         overviewLevel=-1, suffix='', chunkSize=1024, 
+                         overviewLevel=-1, suffix='', chunkSize=1024,
                          date1=None, date2=None):
         '''
         read in a tiff product fileNameBase.*[,tif], tif ext optional.
@@ -211,7 +242,7 @@ class nisarImage(nisarBase2D):
     #
 
     def parseImageDatesFromFileName(self, fileNameBase, index1=3, index2=4,
-                                    dateFormat='%d%b%y', 
+                                    dateFormat='%d%b%y',
                                     date1=None, date2=None):
         '''
         Parse the dates from the directory name the image products are
@@ -234,15 +265,23 @@ class nisarImage(nisarBase2D):
             First and last dates from meta file.
         '''
         baseNamePieces = os.path.basename(fileNameBase).split('_')
-        if date1 is None:
+        # No dates, so parse from file
+        if date2 is None and date1 is None:
             self.date1 = datetime.strptime(baseNamePieces[index1], dateFormat)
-        else:
-            self.date1 = self.parseDate(date1)
-        if date1 is None:
             self.date2 = datetime.strptime(baseNamePieces[index2], dateFormat)
         else:
-            self.date2 = self.parseDate(date2)
-        self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
+            # Use provided dates
+            if date1 is not None:
+                self.date1 = self.parseDate(date1)
+            if date2 is not None:
+                self.date2 = self.parseDate(date2)
+            else:  # No date range
+                date2 = date1
+        # Dateless case
+        if date1 is None:
+            self.midDate = None
+        else:
+            self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
         #
         return self.midDate
 
