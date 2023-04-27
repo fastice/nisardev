@@ -737,11 +737,11 @@ class nisarBase2D():
             Interpolated valutes from x,y locations.
         '''
         if np.isscalar(x):
-            xx1, yy1 = [x], [y]
+            xx1, yy1 = x, y
         elif not grid:
             xx1, yy1 = xarray.DataArray(x), xarray.DataArray(y)
         else:
-            xx1, yy1 = x, y
+            xx1, yy1 = np.array(x), np.array(y)
         myXR = self.subset
         # Array to receive results
         date = self.parseDate(date, defaultDate=False)
@@ -749,9 +749,14 @@ class nisarBase2D():
             myXR = self.subset.sel(time=date, method='nearest')
         #
         result = myXR.interp(x=xx1, y=yy1)
-        if date is None and not grid:
-            result = result.transpose('band', 'time', 'dim_0')
         if returnXR:
+            if date is None and not grid:
+                # Force band be first
+                dims = list(result.dims)
+                if dims[0] == 'time' and dims[1] == 'band':
+                    dims[0] = 'band'
+                    dims[1] = 'time'
+                    result = result.transpose(*dims)
             return result
         else:
             return np.squeeze(
