@@ -361,8 +361,9 @@ class nisarVel(nisarBase2D):
             if index2 is not None:
                 self.date2 = datetime.strptime(baseNamePieces[index2],
                                                dateFormat)
+        elif date2 is not None:
+            self.date2 = date2
         else:
-            # assume monthly
             tmp = self.date1 + timedelta(days=32)
             self.date2 = tmp - timedelta(days=tmp.day)
         self.midDate = self.date1 + (self.date2 - self.date1) * 0.5

@@ -737,7 +737,7 @@ class nisarBase2D():
             Interpolated valutes from x,y locations.
         '''
         if np.isscalar(x):
-            x, y = [x], [y]
+            xx1, yy1 = [x], [y]
         elif not grid:
             xx1, yy1 = xarray.DataArray(x), xarray.DataArray(y)
         else:
