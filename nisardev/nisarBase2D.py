@@ -219,9 +219,9 @@ class nisarBase2D():
     def _mapVariables(self):
         ''' Map the xr variables to band variables (e.g., 'vx' -> self.vx) '''
         # Map variables
-        for myVar in self.xr.band.data:
+        for myVar in self.subset.band.data:
             myVar = str(myVar)
-            bandData = np.squeeze(self.xr.sel(band=myVar).data)
+            bandData = np.squeeze(self.subset.sel(band=myVar).data)
             setattr(self, myVar, bandData)
 
     def _parseGeoInfoStack(self):

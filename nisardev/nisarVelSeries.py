@@ -50,7 +50,7 @@ class nisarVelSeries(nisarBase2D):
         self.variables = None
         self.verbose = verbose
         self.noDataDict = {'vx': -2.0e9, 'vy': -2.0e9, 'vv': -1.0,
-                           'ex': -1.0, 'ey': -1.0, 'dT': -2.0e9}
+                           'ex': -1.0, 'ey': -1.0, 'ev': -1.0, 'dT': -2.0e9}
         self.gdalType = gdal.GDT_Float32  # data type for velocity products
         self.dtype = 'float32'
         self.nLayers = 0  # Number of time layers

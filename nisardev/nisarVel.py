@@ -117,7 +117,6 @@ class nisarVel(nisarBase2D):
         ''' Add speed if only have vx and vy '''
         # Compute speed
         band = f'{bandType}v'
-
         if bandType == 'v':
             wx, wy = 1., 1.,
         elif bandType == 'e':
@@ -140,7 +139,7 @@ class nisarVel(nisarBase2D):
                             combine_attrs='drop')
         # Fix order of coordinates - force vx, vy, vv, ex...
         self.xr = self._setBandOrder({'vx': 0, 'vy': 1, 'vv': 2,
-                            'ex': 3, 'ey': 4, 'ev': 5, 'dT': 6})
+                                      'ex': 3, 'ey': 4, 'ev': 5, 'dT': 6})
         #
         if band not in self.variables:
             self.variables.append(band)
@@ -212,6 +211,7 @@ class nisarVel(nisarBase2D):
         # compute speed rather than download
         if not readSpeed and useVelocity:
             self._addSpeed(bandType='v')
+            self.subSetData(self.boundingBox(units='m'))
         if useErrors:
             self._addSpeed(bandType='e')
         #
@@ -262,8 +262,9 @@ class nisarVel(nisarBase2D):
         None.
         '''
         self.subSetData(bbox)
-        if useVelocity:
-            self.vv = np.sqrt(np.square(self.vx) + np.square(self.vy))
+        # Should be done on read now
+        # if useVelocity:
+        #    self.vv = np.sqrt(np.square(self.vx) + np.square(self.vy))
 
     # ------------------------------------------------------------------------
     # Dates routines.
