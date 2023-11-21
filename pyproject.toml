@@ -10,7 +10,7 @@ repository = "https://github.com/fastice/nisardev"
 keywords = ["SAR", "NISAR"]
 
 [tool.poetry.dependencies]
-python = "^3.7"
+python = ">=3.7"
 #dask = "^2021"
 #pandas = "^1"
 #progressbar2 = "^3"
