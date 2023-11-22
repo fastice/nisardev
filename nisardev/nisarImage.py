@@ -44,7 +44,7 @@ class nisarImage(nisarBase2D):
         '''
         nisarBase2D.__init__(self, numWorkers=numWorkers)
         # self.image, self.sigma0, self.gamma0 = [None] * 3
-        if type(imageType) is not str:
+        if type(imageType) is not str and imageType is not None:
             print('Warning invalid image type')
             return None
 
@@ -57,12 +57,11 @@ class nisarImage(nisarBase2D):
                 return None
         #
         self.myVariables(imageType)
-        setattr(self, imageType, [])
         #
         self.imageType = imageType
         self.verbose = verbose
         #
-        if imageType in imageTypes:
+        if imageType not in imageTypes:
             self.noDataDict = dict(zip(imageTypes, [0, -30., -30.]))
         else:
             if noData is None:
@@ -84,7 +83,7 @@ class nisarImage(nisarBase2D):
         '''
         if imageType is None:
             return
-        #if imageType not in imageTypes:
+        # if imageType not in imageTypes:
         #    print(f'Invalid Image Type: {imageType} must be {imageTypes}')
         myVars = [imageType]
         self.variables = myVars
@@ -182,8 +181,8 @@ class nisarImage(nisarBase2D):
         '''
         # reader will add tiff, so strip here if present
         fileNameBase = fileNameBase.replace('.tif', '')
-        if self.imageType is None:
-            self.detectImageType(fileNameBase)
+
+        self.detectImageType(fileNameBase)
         #
         self.parseImageDatesFromFileName(fileNameBase,
                                          index1=index1, index2=index2,
@@ -278,7 +277,7 @@ class nisarImage(nisarBase2D):
             else:  # No date range
                 date2 = date1
         # Dateless case
-        if date1 is None:
+        if self.date1 is None:
             self.midDate = None
         else:
             self.midDate = self.date1 + (self.date2 - self.date1) * 0.5

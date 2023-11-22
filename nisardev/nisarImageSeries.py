@@ -124,8 +124,7 @@ class nisarImageSeries(nisarBase2D):
 
     def readSeriesFromTiff(self, fileNames, url=False, useStack=True,
                            index1=3, index2=4, dateFormat='%d%b%y',
-                           overviewLevel=-1, suffix='', chunkSize=1024,
-                           dates1=None, dates2=None):
+                           overviewLevel=-1, suffix='', chunkSize=1024):
         '''
         read in a tiff product fileNameBase.*.tif. If
         Files can be read as np arrays of xarrays (useXR=True, not well tested)
@@ -164,15 +163,12 @@ class nisarImageSeries(nisarBase2D):
         '''
         self.imageMaps = []
         stackTemplate = None
-        if dates1 is None:
-            dates1 = [None] * len(fileNames)
-        if dates2 is None:
-            dates2 = [None] * len(fileNames)
         #
-        for fileName, date1, date2 in zip(fileNames, dates1, dates2):
+        for fileName in fileNames:
             fileName = fileName.replace('.tif', '')
-            myImage = nisarImage(date1=date1, date2=date2)
+            myImage = nisarImage()
             myImage.stackTemplate = stackTemplate
+            #date1=date1, date2=date2
             myImage.readDataFromTiff(fileName,
                                      url=url, useStack=useStack,
                                      index1=index1, index2=index2,
