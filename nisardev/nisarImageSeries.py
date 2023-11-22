@@ -122,7 +122,7 @@ class nisarImageSeries(nisarBase2D):
     # I/O Routines
     # ------------------------------------------------------------------------
 
-    def readSeriesFromTiff(self, fileNames, url=False, useStack=True,
+    def readSeriesFromTiff(self, fileNames, url=False, useStack=False,
                            index1=3, index2=4, dateFormat='%d%b%y',
                            overviewLevel=-1, suffix='', chunkSize=1024):
         '''
