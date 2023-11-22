@@ -10,7 +10,7 @@ repository = "https://github.com/fastice/nisardev"
 keywords = ["SAR", "NISAR"]
 
 [tool.poetry.dependencies]
-python = "^3.7"
+python = ">=3.7"
 #dask = "^2021"
 #pandas = "^1"
 #progressbar2 = "^3"
@@ -30,7 +30,7 @@ vcs = "git"
 style = "semver"
 
 [build-system]
-requires = ["setuptools", "poetry-core>=1.0.8"]
+requires = ["setuptools", "poetry-core>=1.0.9"]
 build-backend = "poetry.core.masonry.api"
 #requires = ["setuptools", "poetry-core @ git+https://github.com/python-poetry/poetry-core.git@master"]
 
