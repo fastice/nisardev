@@ -14,7 +14,7 @@ from nisardev import nisarBase2D, nisarVel
 from osgeo import gdal
 import xarray as xr
 from dask.diagnostics import ProgressBar
-from datetime import datetime
+# from datetime import datetime
 
 
 class nisarVelSeries(nisarBase2D):

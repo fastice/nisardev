@@ -1330,7 +1330,7 @@ class nisarBase2D():
         #
         if cmap == 'log':
             displayVar = self.hsvSpeedRender(displayVar.data)
-        pos = ax.imshow(np.ma.masked_where(displayVar == masked, displayVar,
+        pos = ax.imshow(np.ma.masked_where(masked, displayVar,
                                            copy=True), norm=norm, cmap=cmap,
                         extent=self.extent(units=units), **kwargs)
         if title is None:
