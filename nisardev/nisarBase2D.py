@@ -375,6 +375,8 @@ class nisarBase2D():
         resolution = (np.abs((box[2] - box[0]) / nx),
                       np.abs((box[3] - box[1]) / ny))
         # Create xarray using stackstac
+        # fill_value = type(self.dtype)(fill_value)
+        fill_value = getattr(np, self.dtype)(fill_value)
         da = stackstac.stack(items,
                              assets=myVariables,
                              fill_value=fill_value,
@@ -382,7 +384,8 @@ class nisarBase2D():
                              chunksize=chunkSize,
                              snap_bounds=False,
                              xy_coords='center',
-                             resolution=resolution
+                             resolution=resolution,
+                             rescale=False
                              )
         da.rio.write_crs(f'epsg:{int(da.epsg)}', inplace=True)
         da['name'] = 'temp'
