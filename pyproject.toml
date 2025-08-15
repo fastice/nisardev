@@ -13,6 +13,7 @@ keywords = ["SAR", "NISAR"]
 python = ">=3.7"
 gdal = { version = "*", optional = true }
 pyproj = { version = "*", optional = true }
+matplotlib = { version = "*", optional = true }
 #dask = "^2021"
 #pandas = "^1"
 #progressbar2 = "^3"
