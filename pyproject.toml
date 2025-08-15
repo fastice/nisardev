@@ -17,7 +17,7 @@ gdal = { version = "*", optional = true }
 #geopandas = { version = "*", optional = true }
 #dask = { version = "*", optional = true 
 #xarray = { version = "*", optional = true }
-#rioxarray = { version = "*", optional = true }
+rioxarray = { version = "*", optional = true }
 stackstac = "^0.2"
 rio-stac = { git = "https://github.com/developmentseed/rio-stac.git", branch = "main" }
 
