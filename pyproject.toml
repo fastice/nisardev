@@ -18,6 +18,8 @@ geopandas = { version = "*", optional = true }
 dask = { version = "*", optional = true 
 xarray = { version = "*", optional = true }
 rioxarray = { version = "*", optional = true }
+stackstac
+rio-stac = { git = "https://github.com/developmentseed/rio-stac.git", branch = "main" }
 #dask = "^2021"
 #pandas = "^1"
 #progressbar2 = "^3"
