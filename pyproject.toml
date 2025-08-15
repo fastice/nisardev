@@ -11,7 +11,7 @@ keywords = ["SAR", "NISAR"]
 
 [tool.poetry.dependencies]
 python = ">=3.7"
-gdal
+gdal = "*"
 #dask = "^2021"
 #pandas = "^1"
 #progressbar2 = "^3"
