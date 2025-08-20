@@ -137,7 +137,7 @@ class nisarBase2D():
         # Do a lazy open on the tiffs
         # For now useStack turned off since it tries to read the full res
         # data and donwsample instead of the pyramid
-        if not useStack or overviewLevel > -1:
+        if not useStack or overviewLevel > -999:
             # print('noStack')
             myXR = self._lazy_openTiff(fileNameBase, url=url, masked=masked,
                                        time=time, xrName=xrName, skip=skip,
@@ -377,6 +377,7 @@ class nisarBase2D():
         # Create xarray using stackstac
         # fill_value = type(self.dtype)(fill_value)
         fill_value = getattr(np, self.dtype)(fill_value)
+        print(items, myVariables, fill_value, self.dtype, chunkSize,resolution, self.epsg)
         da = stackstac.stack(items,
                              assets=myVariables,
                              fill_value=fill_value,
@@ -385,7 +386,8 @@ class nisarBase2D():
                              snap_bounds=False,
                              xy_coords='center',
                              resolution=resolution,
-                             rescale=False
+                             rescale=False,
+                             epsg=self.epsg
                              )
         da.rio.write_crs(f'epsg:{int(da.epsg)}', inplace=True)
         da['name'] = 'temp'
@@ -432,9 +434,11 @@ class nisarBase2D():
                 bandTiff = f'/vsicurl/{option}&url={fileNameBase}'
             bandTiff = bandTiff.replace('*', band) + '.tif' + suffix
             # read file via rioxarry
-            da = rioxarray.open_rasterio(bandTiff, lock=True,
+            da = rioxarray.open_rasterio(bandTiff,
+                                         lock=True,
                                          default_name=fileNameBase,
-                                         chunks=chunks, masked=masked,
+                                         chunks=chunks,
+                                         masked=masked,
                                          overview_level=overviewLevel)
             # Process time dim
             if time is not None:
@@ -442,11 +446,12 @@ class nisarBase2D():
                 da['time'] = [time]
             da['band'] = [band]
             da['name'] = xrName
-            da['_FillValue'] = self.noDataDict[band]
+            #da['_FillValue'] = self.noDataDict[band]
+            da = da.assign_coords(_FillValue=("band", [self.noDataDict[band]]))
             das.append(da)
         # Concatenate bands (components)
         return xarray.concat(das, dim='band', join='override',
-                             combine_attrs='drop')
+                             combine_attrs='drop', coords='minimal')
 
     def timeSliceData(self, date1, date2):
         '''
@@ -838,11 +843,16 @@ class nisarBase2D():
         myMean = self.subset.mean(dim='time')
         myAnomalyXR = xarray.concat(
             [self.subset.sel(time=t) - myMean for t in self.subset.time],
-            dim='time', join='override', combine_attrs='drop')
+            dim='time',
+            join='override',
+            combine_attrs='drop',
+            coords='minimal',
+            compat='override'
+            )
         # fix coordinate order
         myAnomalyXR = myAnomalyXR.transpose('time', 'band', 'y', 'x')
-        myAnomalyXR['time1'] = self.xr.time1.copy()
-        myAnomalyXR['time2'] = self.xr.time2.copy()
+        myAnomalyXR.assign_coords(time1=self.xr.time1.copy(),
+                                  time2=self.xr.time2.copy())
         return myAnomalyXR
 
     @_applyInTime

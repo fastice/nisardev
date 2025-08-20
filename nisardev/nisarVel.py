@@ -33,7 +33,7 @@ class nisarVel(nisarBase2D):
     legendFontSize = 12  # Font size for legends
     titleFontSize = 15  # Font size for legends
 
-    def __init__(self, verbose=True):
+    def __init__(self, verbose=True, epsg=None):
         '''
         Instantiate nisarVel object. Possible bands are 'vx', 'vy','v', 'ex',
         'ey', 'e'
@@ -45,7 +45,7 @@ class nisarVel(nisarBase2D):
         -------
         None.
         '''
-        nisarBase2D.__init__(self)
+        nisarBase2D.__init__(self, epsg=epsg)
         self.vx, self.vy, self.vv, self.ex, self.ey, self.dT = [None] * 6
         self.variables = None
         self.verbose = verbose
@@ -133,10 +133,11 @@ class nisarVel(nisarBase2D):
         dv['band'] = [band]
         dv['time'] = self.xr['time']
         dv['name'] = self.xr['name']
-        dv['_FillValue'] = self.noDataDict[band]
+        #dv['_FillValue'] = self.noDataDict[band]
+        dv = dv.assign_coords(_FillValue=("band", [self.noDataDict[band]]))
         # Add to existing xr with vx and vy
         self.xr = xr.concat([self.xr, dv], dim='band', join='override',
-                            combine_attrs='drop')
+                            combine_attrs='drop', compat='override', coords='minimal')
         # Fix order of coordinates - force vx, vy, vv, ex...
         self.xr = self._setBandOrder({'vx': 0, 'vy': 1, 'vv': 2,
                                       'ex': 3, 'ey': 4, 'ev': 5, 'dT': 6})
@@ -147,7 +148,7 @@ class nisarVel(nisarBase2D):
 
     def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
                          useDT=False,
-                         readSpeed=False, url=False, useStack=True,
+                         readSpeed=False, url=False, useStack=False,
                          index1=4, index2=5, dateFormat='%d%b%y',
                          overviewLevel=-1, masked=True, suffix='',
                          date1=None, date2=None, chunkSize=1024):
@@ -195,6 +196,8 @@ class nisarVel(nisarBase2D):
         -------
         None.
         '''
+        if useStack:
+            print('Ignoring use stack flag')
         self.parseVelDatesFromFileName(fileNameBase, index1=index1,
                                        index2=index2, dateFormat=dateFormat,
                                        date1=date1, date2=date2)

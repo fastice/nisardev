@@ -11,6 +11,7 @@ from nisardev import nisarBase2D, nisarImage
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
 from osgeo import gdal
 import xarray as xr
+import numpy as np
 # from dask.diagnostics import ProgressBar
 
 imageTypes = ['image', 'sigma0', 'gamma0']
@@ -181,8 +182,18 @@ class nisarImageSeries(nisarBase2D):
         self.imageType = myImage.imageType
         # Combine individual bands
         self.nLayers = len(fileNames)
-        self.xr = xr.concat([x.xr for x in self.imageMaps], dim='time',
-                            join='override', combine_attrs='drop')
+        time1 = [np.datetime64(x.xr.time1.data.item(), 'ns') 
+                 for x in self.imageMaps]
+        time2 = [np.datetime64(x.xr.time2.data.item(), 'ns')
+                 for x in self.imageMaps]
+        self.xr = xr.concat([x.xr for x in self.imageMaps],
+                            dim='time',
+                            join='override', 
+                            combine_attrs='drop',
+                            coords='minimal', 
+                            compat='override')
+        self.xr = self.xr.assign_coords(time1=("time", np.array(time1)),
+                                        time2=("time", np.array(time2)))
         # ensure that properly sorted in time
         self.xr = self.xr.sortby(self.xr.time)
         # This forces a subset=entire image, which will trigger initialization

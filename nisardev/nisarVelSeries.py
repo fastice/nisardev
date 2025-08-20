@@ -33,7 +33,7 @@ class nisarVelSeries(nisarBase2D):
     legendFontSize = 12  # Font size for legends
 #    titleFontSize = 16  # Font size for legends
 
-    def __init__(self, verbose=True):
+    def __init__(self, verbose=True, epsg=None):
         '''
         Instantiate nisarVel object. Possible bands are 'vx', 'vy','v', 'ex',
         'ey', 'e'
@@ -45,7 +45,7 @@ class nisarVelSeries(nisarBase2D):
         -------
         None.
         '''
-        nisarBase2D.__init__(self)
+        nisarBase2D.__init__(self, epsg=epsg)
         self.vx, self.vy, self.vv, self.ex, self.ey = [None] * 5
         self.variables = None
         self.verbose = verbose
@@ -54,6 +54,7 @@ class nisarVelSeries(nisarBase2D):
         self.gdalType = gdal.GDT_Float32  # data type for velocity products
         self.dtype = 'float32'
         self.nLayers = 0  # Number of time layers
+
 
     def myVariables(self, useVelocity, useErrors, useDT, readSpeed=False):
         '''
@@ -145,7 +146,7 @@ class nisarVelSeries(nisarBase2D):
 
     def readSeriesFromTiff(self, fileNames, useVelocity=True, useErrors=False,
                            useDT=False,
-                           readSpeed=False, url=False, useStack=True,
+                           readSpeed=False, url=False, useStack=False,
                            index1=None, index2=None, dateFormat=None,
                            overviewLevel=-1, suffix='', chunkSize=1024):
         '''
@@ -198,7 +199,7 @@ class nisarVelSeries(nisarBase2D):
         stackTemplate = None
         with ProgressBar():
             for fileName in fileNames:
-                myVel = nisarVel()
+                myVel = nisarVel(epsg=self.epsg)
                 myVel.stackTemplate = stackTemplate
                 myVel.readDataFromTiff(fileName, useVelocity=useVelocity,
                                        useErrors=useErrors,
@@ -213,8 +214,17 @@ class nisarVelSeries(nisarBase2D):
         bBox = myVel.boundingBox(units='m')
         # Combine individual bands
         self.nLayers = len(fileNames)
-        self.xr = xr.concat([x.xr for x in self.velMaps], dim='time',
-                            join='override', combine_attrs='drop')
+        time1 = [x.time1 for x in self.velMaps]
+        time2 = [x.time2 for x in self.velMaps]
+        self.xr = xr.concat([x.xr for x in self.velMaps],
+                            dim='time',
+                            join='override', 
+                            combine_attrs='drop',
+                            coords='minimal', 
+                            compat='override')
+        #
+        self.xr = self.xr.assign_coords(time1=("time", np.array(time1)),
+                                        time2=("time", np.array(time2)))
         # ensure that properly sorted in time
         self.xr = self.xr.sortby(self.xr.time)
         # This forces a subset=entire image, which will trigger initialization
@@ -243,13 +253,15 @@ class nisarVelSeries(nisarBase2D):
                           coords=[self.xr.time, self.xr.y, self.xr.x],
                           dims=['time', 'y', 'x'])
         # add band for vv
-        dv = dv.expand_dims(dim=['band'])
+        #dv = dv.expand_dims(dim=['band'])
         dv['band'] = [band]
         dv['time'] = self.xr['time']
         dv['name'] = self.xr['name']
+        dv = dv.assign_coords(_FillValue=("band", [self.noDataDict[band]]))
         # Add to vx, vy xr
         self.xr = xr.concat([self.xr, dv], dim='band', join='override',
-                            combine_attrs='drop')
+                            combine_attrs='drop', coords='minimal')
+       
         #
         if band not in self.variables:
             self.variables.append(band)
