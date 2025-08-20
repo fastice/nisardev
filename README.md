@@ -6,3 +6,7 @@ For examples of how this library is used refer to notebooks in https://github.co
 ## Installation
 
 In an existing python virtual environment: `pip install https://github.com/fastice/nisardev.git@main`
+
+## Release Notes
+
+0.0.9  2025-08-20  Updated to fix issues with NSIDC migration of data sets to cloud 
