@@ -10,17 +10,19 @@ repository = "https://github.com/fastice/nisardev"
 keywords = ["SAR", "NISAR"]
 
 [tool.poetry.dependencies]
-python = ">=3.7"
-gdal = { version = "*", optional = true }
-pyproj = { version = "*", optional = true }
-matplotlib = { version = "*", optional = true }
-geopandas = { version = "*", optional = true }
-dask = { version = "*", optional = true }
-xarray = { version = "*", optional = true }
-rioxarray = { version = "*", optional = true }
-stackstac = "^0.2"
-rio-stac = { git = "https://github.com/developmentseed/rio-stac.git", branch = "main" }
-holoviews = { version = "*", optional = true }
+# Its best to handle these through the enviroment file at
+# https://github.com/fastice/GrIMPNotebooks/blob/master/binder/environment.yml
+# Otherwise pip may cause conflicts with conda packages
+#python = ">=3.7"
+#gdal = { version = "*", optional = true }
+#pyproj = { version = "*", optional = true }
+#matplotlib = { version = "*", optional = true }
+#dask = { version = "*", optional = true }
+#xarray = { version = "*", optional = true }
+#rioxarray = { version = "*", optional = true }
+#stackstac = "^0.2"
+#rio-stac = { git = "https://github.com/developmentseed/rio-stac.git", branch = "main" }
+#holoviews = { version = "*", optional = true }
 [tool.poetry.dev-dependencies]
 ipython = "*"
 
