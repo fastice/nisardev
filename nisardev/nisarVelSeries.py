@@ -55,7 +55,6 @@ class nisarVelSeries(nisarBase2D):
         self.dtype = 'float32'
         self.nLayers = 0  # Number of time layers
 
-
     def myVariables(self, useVelocity, useErrors, useDT, readSpeed=False):
         '''
         Based on the input flags, this routine determines which velocity/error
@@ -144,11 +143,13 @@ class nisarVelSeries(nisarBase2D):
     # I/O Routines
     # ------------------------------------------------------------------------
 
-    def readSeriesFromTiff(self, fileNames, useVelocity=True, useErrors=False,
-                           useDT=False,
-                           readSpeed=False, url=False, useStack=False,
+    def readSeriesFromTiff(self, fileNames, bbox=None,
+                           useVelocity=True, useErrors=False, useDT=False,
+                           readSpeed=False, url=False, useStack=True,
                            index1=None, index2=None, dateFormat=None,
-                           overviewLevel=-1, suffix='', chunkSize=1024):
+                           overviewLevel=-1, suffix='',
+                           chunkSize=2048,
+                           subsetMode=False):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -160,11 +161,13 @@ class nisarVelSeries(nisarBase2D):
 
         Parameters
         ----------
-        fileNameBase : str
-            FileNameBase should be of the form
-            pattern.*.abc or pattern*.
+        fileNames : list
+            List of files should be of the form
+            [pattern.*.abc ...] or [pattern*....]
             The wildcard (*) will be filled with the values in myVars
             e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
+        bbox dict, optional
+            bbox to clip the product to {'minx': ...}
         useVelocity : bool, optional
             Include velocity if True. The default is True.
         useErrors : bool, optional
@@ -176,7 +179,7 @@ class nisarVelSeries(nisarBase2D):
         url : bool, optional
             Read data from url
         useStack : Boolean, optional
-            Use stackstac for full res data, overviews will xr.
+            Repeat headers for quicker open. The default is True.
             The default is True.
         index1, index2 : location of dates in filename with seperated by _
         dateFormat : format code to strptime
@@ -188,50 +191,63 @@ class nisarVelSeries(nisarBase2D):
             Any suffix that needs to be appended (e.g., for dropbox links)
         chunkSize : int, optional
             Chunksize for xarray. Default is 1024.
+        subsetMode: bool, optional
+            If true, save the result as a subset instead of xr
         Returns
         -------
         None.
         '''
+        self.inputParamsSeries = locals()
+        self.fileNames = fileNames
+        for x in ['self', 'subsetMode', 'bbox', 'fileNames']:
+            self.inputParamsSeries.pop(x, None)
         self.variables = self.myVariables(useVelocity, useErrors, useDT,
                                           readSpeed=readSpeed)
         self.velMaps = []
         #
-        stackTemplate = None
+        self.template = None
         with ProgressBar():
             for fileName in fileNames:
-                myVel = nisarVel(epsg=self.epsg)
-                myVel.stackTemplate = stackTemplate
-                myVel.readDataFromTiff(fileName, useVelocity=useVelocity,
+                myVel = nisarVel(epsg=self.epsg, template=self.template)
+                myVel.readDataFromTiff(fileName,
+                                       bbox=bbox,
+                                       useVelocity=useVelocity,
                                        useErrors=useErrors,
                                        readSpeed=readSpeed,
+                                       useDT=useDT,
                                        url=url, useStack=useStack,
                                        index1=index1, index2=index2,
                                        dateFormat=dateFormat,
                                        overviewLevel=overviewLevel,
                                        suffix=suffix, chunkSize=chunkSize)
-                stackTemplate = myVel.stackTemplate
+                self.template = myVel.template
                 self.velMaps.append(myVel)
-        bBox = myVel.boundingBox(units='m')
+        if bbox is None:
+            bbox = myVel.boundingBox(units='m')
         # Combine individual bands
         self.nLayers = len(fileNames)
         time1 = [x.time1 for x in self.velMaps]
         time2 = [x.time2 for x in self.velMaps]
-        self.xr = xr.concat([x.xr for x in self.velMaps],
-                            dim='time',
-                            join='override', 
-                            combine_attrs='drop',
-                            coords='minimal', 
-                            compat='override')
+        myXR = xr.concat([x.xr for x in self.velMaps],
+                         dim='time',
+                         join='override',
+                         combine_attrs='drop',
+                         coords='minimal',
+                         compat='override')
         #
-        self.xr = self.xr.assign_coords(time1=("time", np.array(time1)),
-                                        time2=("time", np.array(time2)))
+        myXR = myXR.assign_coords(time1=("time", np.array(time1)),
+                                  time2=("time", np.array(time2)))
         # ensure that properly sorted in time
-        self.xr = self.xr.sortby(self.xr.time)
+        myXR = myXR.sortby(myXR.time)
         # This forces a subset=entire image, which will trigger initialization
         # Spatial parameters derived from the first velMap
-        self.subSetVel(bBox)
-        self.xr = self.xr.rename('VelocitySeries')
-        self.time = [self.datetime64ToDatetime(x) for x in self.xr.time.data]
+        if not subsetMode:
+            self.xr = myXR
+            self.subset = self.xr.copy(deep=True)
+        else:
+            self.subset = myXR
+        myXR = myXR.rename('VelocitySeries')
+        self.time = [self.datetime64ToDatetime(x) for x in myXR.time.data]
         # Update times
         self._getTimes()
 
@@ -253,7 +269,6 @@ class nisarVelSeries(nisarBase2D):
                           coords=[self.xr.time, self.xr.y, self.xr.x],
                           dims=['time', 'y', 'x'])
         # add band for vv
-        #dv = dv.expand_dims(dim=['band'])
         dv['band'] = [band]
         dv['time'] = self.xr['time']
         dv['name'] = self.xr['name']
@@ -261,7 +276,6 @@ class nisarVelSeries(nisarBase2D):
         # Add to vx, vy xr
         self.xr = xr.concat([self.xr, dv], dim='band', join='override',
                             combine_attrs='drop', coords='minimal')
-       
         #
         if band not in self.variables:
             self.variables.append(band)
@@ -325,7 +339,16 @@ class nisarVelSeries(nisarBase2D):
         -------
         None.
         '''
-        self.subSetData(bbox)
+        if self.template is not None:
+            self.readSeriesFromTiff(self.fileNames,
+                                    bbox=bbox,
+                                    subsetMode=True,
+                                    **self.inputParamsSeries)
+            #:
+            self._mapVariables()
+            self._parseGeoInfo()
+        else:
+            self.subSetData(bbox)
 
     # ------------------------------------------------------------------------
     # Ploting routines.
@@ -724,4 +747,3 @@ class nisarVelSeries(nisarBase2D):
             errors = []
         #
         return nisarBase2D.mean(self, skipna=skipna, errors=errors)
-    #     return result

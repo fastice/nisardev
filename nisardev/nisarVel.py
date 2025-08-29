@@ -33,7 +33,7 @@ class nisarVel(nisarBase2D):
     legendFontSize = 12  # Font size for legends
     titleFontSize = 15  # Font size for legends
 
-    def __init__(self, verbose=True, epsg=None):
+    def __init__(self, verbose=True, epsg=None, template=None):
         '''
         Instantiate nisarVel object. Possible bands are 'vx', 'vy','v', 'ex',
         'ey', 'e'
@@ -45,7 +45,7 @@ class nisarVel(nisarBase2D):
         -------
         None.
         '''
-        nisarBase2D.__init__(self, epsg=epsg)
+        nisarBase2D.__init__(self, epsg=epsg, template=template)
         self.vx, self.vy, self.vv, self.ex, self.ey, self.dT = [None] * 6
         self.variables = None
         self.verbose = verbose
@@ -113,45 +113,64 @@ class nisarVel(nisarBase2D):
     # I/O Routines
     # ------------------------------------------------------------------------
 
-    def _addSpeed(self, bandType='v'):
+    def _addSpeed(self, bandType='v', subset=False):
         ''' Add speed if only have vx and vy '''
         # Compute speed
         band = f'{bandType}v'
+        #
+        if subset:
+            myXR = self.subset
+        else:
+            myXR = self.xr
+        #
         if bandType == 'v':
             wx, wy = 1., 1.,
         elif bandType == 'e':
-            wx = self.vx / self.vv
-            wy = self.vy / self.vv
+            wx = np.squeeze(myXR.sel(band='vx') / myXR.sel(band='vv')).data
+            wy = np.squeeze(myXR.sel(band='vy') / myXR.sel(band='vv')).data
         else:
             print('_addSpeed: Invalid band type')
-        dv = xr.DataArray(
-            np.sqrt(np.square(wx * getattr(self, f'{bandType}x')) +
-                    np.square(wy * getattr(self, f'{bandType}y'))),
-            coords=[self.xr.y, self.xr.x], dims=['y', 'x'])
+        #
+        data = np.sqrt(np.square(wx * getattr(self, f'{bandType}x')) +
+                       np.square(wy * getattr(self, f'{bandType}y')))
+        dv = xr.DataArray(data,
+                          coords=[myXR.y, myXR.x], dims=['y', 'x'])
         # setup band as vv
         dv = dv.expand_dims(dim=['time', 'band'])
         dv['band'] = [band]
         dv['time'] = self.xr['time']
         dv['name'] = self.xr['name']
-        #dv['_FillValue'] = self.noDataDict[band]
-        dv = dv.assign_coords(_FillValue=("band", [self.noDataDict[band]]))
+        #   dv['_FillValue'] = self.noDataDict[band]
+        dv = dv.assign_coords(_FillValue=("band",
+                                          np.array([self.noDataDict[band]])))
         # Add to existing xr with vx and vy
-        self.xr = xr.concat([self.xr, dv], dim='band', join='override',
-                            combine_attrs='drop', compat='override', coords='minimal')
+        myXR = xr.concat([myXR, dv],
+                         dim='band',
+                         join='override',
+                         combine_attrs='drop',
+                         compat='override',
+                         coords='minimal')
         # Fix order of coordinates - force vx, vy, vv, ex...
-        self.xr = self._setBandOrder({'vx': 0, 'vy': 1, 'vv': 2,
-                                      'ex': 3, 'ey': 4, 'ev': 5, 'dT': 6})
+        myXR = self._setBandOrder({'vx': 0, 'vy': 1, 'vv': 2,
+                                   'ex': 3, 'ey': 4, 'ev': 5, 'dT': 6},
+                                  myXR=myXR)
+        #
+        if subset:
+            self.subset = myXR
+        else:
+            self.xr = myXR
         #
         if band not in self.variables:
             self.variables.append(band)
         self._mapVariables()
 
-    def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
+    def readDataFromTiff(self, fileNameBase, bbox=None, useVelocity=True,
+                         useErrors=False,
                          useDT=False,
-                         readSpeed=False, url=False, useStack=False,
+                         readSpeed=False, url=False, useStack=True,
                          index1=4, index2=5, dateFormat='%d%b%y',
                          overviewLevel=-1, masked=True, suffix='',
-                         date1=None, date2=None, chunkSize=1024):
+                         date1=None, date2=None, chunkSize=2048):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -167,6 +186,8 @@ class nisarVel(nisarBase2D):
             FileNameBase should be of the form
             pattern.*.abc or pattern*.
             The wildcard (*) will be filled with the values in myVars
+        bbox dict, optional
+            bbox to clip the product to {'minx': ...}
             e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
         useVelocity : bool, optional
             Include velocity if True. The default is True.
@@ -179,7 +200,7 @@ class nisarVel(nisarBase2D):
         url : bool, optional
             Read data from url
         useStack : boolean, optional
-            Uses stackstac for full resolution data. The default is True.
+            Repeat headers for quicker open. The default is True.
         index1, index2 : location of dates in filename with seperated by _
             dateFormat : format code to strptime
         overviewLevel: int, optional
@@ -196,8 +217,9 @@ class nisarVel(nisarBase2D):
         -------
         None.
         '''
-        if useStack:
-            print('Ignoring use stack flag')
+        self.readSpeed = readSpeed
+        self.useErrors = useErrors
+        self.useVelocity = useVelocity
         self.parseVelDatesFromFileName(fileNameBase, index1=index1,
                                        index2=index2, dateFormat=dateFormat,
                                        date1=date1, date2=date2)
@@ -207,21 +229,36 @@ class nisarVel(nisarBase2D):
             skip = []
         else:
             skip = ['vv']  # Force skip
-        self.readXR(fileNameBase, url=url, masked=True, useStack=useStack,
-                    time=self.midDate, skip=skip, time1=self.date1,
-                    time2=self.date2, overviewLevel=overviewLevel,
-                    suffix=suffix, chunkSize=chunkSize)
+        # save parameters for other routines, removing unneeded items.
+        self.inputParams = locals()
+        for x in ['self', 'fileNameBase', 'useDT',
+                  'readSpeed', 'useVelocity', 'useErrors',
+                  'useStack', 'index1', 'index2', 'dateFormat',
+                  'date1', 'date2', 'bbox']:
+            self.inputParams.pop(x, None)
+        #
+        self.readXR(fileNameBase,
+                    bbox=bbox,
+                    url=url,
+                    masked=True,
+                    useStack=useStack,
+                    time=self.midDate,
+                    skip=skip,
+                    time1=self.date1,
+                    time2=self.date2,
+                    overviewLevel=overviewLevel,
+                    suffix=suffix,
+                    chunkSize=chunkSize)
         # compute speed rather than download
         if not readSpeed and useVelocity:
             self._addSpeed(bandType='v')
-            self.subSetData(self.boundingBox(units='m'))
+            # self.subSetData(self.boundingBox(units='m'))
         if useErrors:
             self._addSpeed(bandType='e')
         #
         self.xr = self.xr.rename('VelocityMap')
         self.fileNameBase = fileNameBase  # save filenameBase
         # force intial subset to entire image
-        # print(self.boundingBox(units='m'))
         self.subSetData(self.boundingBox(units='m'))
 
     def readDataFromNetCDF(self, cdfFile):
@@ -264,10 +301,29 @@ class nisarVel(nisarBase2D):
         -------
         None.
         '''
-        self.subSetData(bbox)
-        # Should be done on read now
-        # if useVelocity:
-        #    self.vv = np.sqrt(np.square(self.vx) + np.square(self.vy))
+        # if a template exists, subset by rebuilding subset from scratch
+        if self.template is not None:
+            subset = self._lazyOpenProduct(self.fileNameBase,
+                                           bbox=bbox,
+                                           time=self.midDate,
+                                           **self.inputParams)
+            #
+            subset['time1'] = self.subset['time1'].data
+            subset['time2'] = self.subset['time2'].data
+            #
+            self._mapVariables()
+            self.subset = subset
+            if not self.readSpeed and self.useVelocity:
+                self._addSpeed(bandType='v', subset=True)
+            if self.useErrors:
+                self._addSpeed(bandType='e', subset=True)
+            #
+            self._mapVariables()
+            self._parseGeoInfo()
+            #
+        else:
+            # using rioxarray, so use clipbox method
+            self.subSetData(bbox)
 
     # ------------------------------------------------------------------------
     # Dates routines.

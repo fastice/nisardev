@@ -145,9 +145,10 @@ class nisarImage(nisarBase2D):
 
         self.myVariables(self.imageType)
 
-    def readDataFromTiff(self, fileNameBase, url=False, useStack=True,
-                         dateFormat='%d%b%y', index1=3, index2=4,
-                         overviewLevel=-1, suffix='', chunkSize=1024,
+    def readDataFromTiff(self, fileNameBase, bbox=None, url=False,
+                         useStack=True, dateFormat='%d%b%y',
+                         index1=3, index2=4,
+                         overviewLevel=-1, suffix='', chunkSize=2048,
                          date1=None, date2=None):
         '''
         read in a tiff product fileNameBase.*[,tif], tif ext optional.
@@ -156,6 +157,8 @@ class nisarImage(nisarBase2D):
         ----------
         fileNameBase : str
             FileNameBase should be of the form
+        bbox dict, optional
+           bbox to clip the product to {'minx': ...}
         url : bool, optional
             Read data from url
         useStack : boolean, optional
@@ -170,7 +173,7 @@ class nisarImage(nisarBase2D):
         suffix : str, optional
             Any suffix that needs to be appended (e.g., for dropbox links)
         chunkSize : int, optional
-            Chunksize for xarray. Default is 1024.
+            Chunksize for xarray. Default is 4096.
         date1 : "YYYY-MM-DD" or datetime
             First date. Default is None, which parses date from filename.
         date2 : "YYYY-MM-DD" or datetime
@@ -189,14 +192,29 @@ class nisarImage(nisarBase2D):
                                          date1=date1, date2=date2)
         self.variables = self.myVariables(self.imageType)
         #
-        if 'image' in self.variables:
-            fill_value = 0
-        else:
-            fill_value = np.nan
-        self.readXR(fileNameBase, url=url, masked=False, useStack=useStack,
-                    time=self.midDate, time1=self.date1,
-                    time2=self.date2, overviewLevel=overviewLevel,
-                    suffix=suffix, fill_value=fill_value, chunkSize=chunkSize)
+        # if 'image' in self.variables:
+        #     fill_value = 0
+        # else:
+        #     fill_value = np.nan
+        #
+        self.inputParams = locals()
+        for x in ['self', 'fileNameBase', 'useDT',
+                  'readSpeed', 'useVelocity', 'useErrors',
+                  'useStack', 'index1', 'index2', 'dateFormat',
+                  'date1', 'date2', 'bbox']:
+            self.inputParams.pop(x, None)
+        #
+        self.readXR(fileNameBase,
+                    bbox=bbox,
+                    url=url,
+                    masked=False,
+                    useStack=useStack,
+                    time=self.midDate,
+                    time1=self.date1,
+                    time2=self.date2,
+                    overviewLevel=overviewLevel,
+                    suffix=suffix,
+                    chunkSize=chunkSize)
         # Rename with to image type
         self.xr = self.xr.rename(self.imageType)
         self.fileNameBase = fileNameBase  # save filenameBase
@@ -234,7 +252,21 @@ class nisarImage(nisarBase2D):
         -------
         None.
         '''
-        self.subSetData(bbox)
+        if self.template is not None:
+            subset = self._lazyOpenProduct(self.fileNameBase,
+                                           bbox=bbox,
+                                           time=self.midDate,
+                                           **self.inputParams)
+            #
+            subset['time1'] = self.subset['time1'].data
+            subset['time2'] = self.subset['time2'].data
+            #
+            print('here')
+            self.subset = subset
+            self._mapVariables()
+            self._parseGeoInfo()
+        else:
+            self.subSetData(bbox)
 
     #
     # ---- Dates routines.

@@ -13,21 +13,20 @@ import xarray
 import pyproj
 import dask
 import rioxarray
-import stackstac
 import os
 import matplotlib.pylab as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib import colors
 from datetime import datetime
-import rio_stac
-import pystac
 import holoviews as hv
 import panel as pn
-from copy import deepcopy
+from affine import Affine
+import rasterio
 # from dask.diagnostics import ProgressBar
 import math
 from bokeh.models.formatters import DatetimeTickFormatter
-
+from dask import delayed
+from rasterio.windows import Window
 overviewLevels = dict(zip(range(-1, 10), 2**np.arange(0, 11)))
 
 
@@ -42,7 +41,7 @@ class nisarBase2D():
     __metaclass__ = ABCMeta
 
     def __init__(self,  sx=None, sy=None, x0=None, y0=None, dx=None, dy=None,
-                 verbose=True, epsg=None, numWorkers=4, stackTemplate=None):
+                 verbose=True, epsg=None, numWorkers=2, template=None):
         ''' initialize a nisar velocity object'''
         self.sx, self.sy = sx, sy  # Image size in pixels
         self.x0, self.y0 = x0, y0  # Origin (center of lower left pixel) in m
@@ -58,7 +57,8 @@ class nisarBase2D():
         self.dtype = 'float32'
         self.useStackstac = False
         self.xforms = {}  # Cached pyproj transforms
-        self.stackTemplate = stackTemplate
+        self.template = template
+        self.fileNameBase = None
         dask.config.set(num_workers=numWorkers)
 
     #
@@ -104,59 +104,66 @@ class nisarBase2D():
     # ---- Input and array creation
     #
 
-    def readXR(self, fileNameBase, url=False, masked=False, useStack=False,
-               time=None, time1=None, time2=None, xrName='None', skip=[],
-               overviewLevel=-1, suffix='', chunkSize=1024, fill_value=np.nan):
+    def readXR(self, fileNameBase, bbox=None, url=False, masked=False,
+               useStack=True, time=None, time1=None, time2=None,
+               xrName='None', skip=[], overviewLevel=-1, suffix='',
+               chunkSize=2048):
         ''' Use read data into rioxarray variable
         Parameters
         ----------
         fileNameBase = str
             template with filename firstpart_*_secondpart (no .tif)
             the * will be replaced with the different compnents (e.g., vx,vy)
+        bbox dict, optional
+            bbox to clip the product to {'minx': ...}
         url bool, optional
             Set true if fileNameBase is a link
         masked : boolean, optional.
             Masked keyword to lazy_open_tiff. The default is False
         useStack : boolean, optional
-            Uses stackstac for full resolution data. The default is True.
+            Repeat headers for quicker open. The default is True.
         time : datetime, optional
             nominal center. The default is None.
-        time1 : TYPE, optional
-            Nominal start time. The default is None.
-        time2 : TYPE, optional
-            Nominal endtie. The default is None.
+        time1, time2 : TYPE, optional
+            Nominal start and end time. The default is None.
         xrName : str, optional
             Name for xarray. The default is None
+        skip : list, optional
+            List of bands to skip. The default is [].
         overviewLevel: int
             Overview (pyramid) level to read: -1->full res, 0->1/2 res,
             1->1/4 res....to image dependent max downsampling level.
             The default is -1 (full res)
         suffix : str, optional
             Any suffix that needs to be appended (e.g., for dropbox links)
+        chunkSize : int, optional
+            Chunk size for reading data
         '''
         # Do a lazy open on the tiffs
         # For now useStack turned off since it tries to read the full res
         # data and donwsample instead of the pyramid
-        if not useStack or overviewLevel > -999:
-            # print('noStack')
+        if useStack:
+            myXR = self._lazyOpenProduct(fileNameBase,
+                                         bbox=bbox,
+                                         url=url,
+                                         masked=masked,
+                                         time=time, xrName=xrName,
+                                         skip=skip,
+                                         overviewLevel=overviewLevel,
+                                         suffix=suffix,
+                                         chunkSize=chunkSize)
+        else:
             myXR = self._lazy_openTiff(fileNameBase, url=url, masked=masked,
                                        time=time, xrName=xrName, skip=skip,
                                        overviewLevel=overviewLevel,
                                        suffix=suffix, chunkSize=chunkSize)
-        else:  # Not debugged
-            items = self._construct_stac_items(fileNameBase, time,
-                                               url=url,
-                                               skip=skip)
-            myXR = self._lazy_open_stack(items, skip=skip,
-                                         overviewLevel=overviewLevel,
-                                         chunkSize=chunkSize,
-                                         fill_value=fill_value)
+
         # Initialize array
         self.initXR(myXR, time=time, time1=time1, time2=time2,
                     useStack=useStack)
 
     def initXR(self, XR, time=None, time1=None, time2=None, xrName='None',
-               useStack=False):
+               useStack=True):
         '''
         Setup class using passed xarray either input from file or passed
         directly.
@@ -179,6 +186,7 @@ class nisarBase2D():
         '''
         if self.variables is None:
             self.variables = list(XR.band.data)
+            print('self.var', self.variables)
         # initially subset=full
         self.xr = XR
         self.subset = XR
@@ -224,16 +232,6 @@ class nisarBase2D():
             bandData = np.squeeze(self.subset.sel(band=myVar).data)
             setattr(self, myVar, bandData)
 
-    def _parseGeoInfoStack(self):
-        ''' parse geoinfo for stackstac - do not use until stac fixed'''
-        myXr = self.subset
-        # get epsg
-        self.epsg = np.int32(myXr.epsg)
-        gT = list(myXr['proj:transform'].data.item())
-        self.dx, self.dy = abs(gT[4]), abs(gT[5])
-        #
-        self._computeCoords(myXr)
-
     def _parseGeoInfo(self):
         '''Parse geo info out of xr spatial ref'''
         myXr = self.subset
@@ -266,6 +264,7 @@ class nisarBase2D():
         xDS = xarray.open_dataset(cdfFile)
         xDS['time1'] = xDS.time1.compute()
         xDS['time2'] = xDS.time2.compute()
+        self.variables = [str(x) for x in xDS.band.data]
         # Pull the first variable that is not spatial_ref
         for var in list(xDS.data_vars.keys()):
             if var != 'spatial_ref':
@@ -305,99 +304,272 @@ class nisarBase2D():
         self.subset.load()
         self._mapVariables()
 
-    def _get_stac_item_template(self, URL, skip=[], url=True):
+    def _lazyOpenProduct(self, fileNameBase, bbox=None, masked=True, url=False,
+                         time=None, xrName='None', skip=[], overviewLevel=None,
+                         suffix='', chunkSize=2048):
         '''
-        read first geotiff to get STAC Item template (returns pystac.Item)
-        '''
-        date = datetime(1999, 1, 1)  # dummy date
-        # Create with first asset
-        myVariables = [x for x in self.variables if x not in skip]
-        band1 = myVariables[0]
-        bandTiff = URL.replace('*', band1) + '.tif'
-        if url:
-            bandTiff = f'/vsicurl/?list_dir=no&url={bandTiff}'
+        Lazy open of a single velocity product, skipping headers if a template
+        exists
 
-        item = rio_stac.create_stac_item(bandTiff,
-                                         input_datetime=date,
-                                         asset_name=band1,
-                                         asset_media_type=str(
-                                             pystac.MediaType.COG),
-                                         with_proj=True,
-                                         with_raster=True,
-                                         )
-        for band in myVariables[1:]:
-            newAsset = deepcopy(item.assets[band1].to_dict())
-            newAsset['href'] = URL.replace('*', band) + '.tif'
-            item.asset = item.add_asset(band,
-                                        item.assets[band1].from_dict(newAsset))
-        self.dtype = \
-            item.assets[myVariables[0]].extra_fields[
-                'raster:bands'][0]['data_type']
-        return item
-
-    def _construct_stac_items(self, fileNameBase, time, url=True, skip=[]):
-        ''' construct STAC-style dictionaries of CMR urls for stackstac
-        Currently not debugged
+        Parameters
+        ----------
+        fileNameBase, str
+            template with filename firstpart_*_secondpart (no .tif)
+        bbox dict, optional
+            bbox to clip the product to {'minx': ...}
+        masked : bool, optional
+            Set no data to nan if true. The default is True.
+        url : bool, optional
+            Avoids directory read when using urls. The default is False.
+        time : datetime, optional
+            The time for the product. The default is None.
+        xrName : str, optional
+            Name for xarray. The default is None
+        skip : list, optional
+            List of bands to skip. The default is [].
+        overviewLevel: int
+          Overview (pyramid) level to read: -1->full res, 0->1/2 res,
+          1->1/4 res....to image dependent max downsampling level.
+          The default is -1 (full res)
+        suffix : str, optional
+            Any suffix that needs to be appended (e.g., for dropbox links)
+        chunkSize : int, optional
+            Chunk size for reading data
+        Returns
+        -------
+        xarray
+            xarray with the data from the tiff.
         '''
-        if self.stackTemplate is None:
-            self.stackTemplate = self._get_stac_item_template(fileNameBase,
-                                                              skip=[], url=url)
-        # make a copy
-        item = deepcopy(self.stackTemplate)
-        # update time
-        item.set_datetime(time)
-        # Conver to dict
-        itemDict = item.to_dict()
-        itemDict['id'] = fileNameBase
-        #
-        option = '?list_dir=no'
-        # update variables
-        for band in self.variables:
+        # initialize template if one doesn't already exist
+        self.fileNameBase = fileNameBase
+        if self.template is None:
             if url:
-                bandTiff = f'/vsicurl/{option}&url={fileNameBase}'
+                bandTiff = f'/vsicurl/?list_dir=no&url={fileNameBase}'
             else:
                 bandTiff = fileNameBase
-            itemDict['assets'][band]['href'] = \
-                f'{bandTiff.replace("*",band)}.tif'
-        #  Convert back to item type
-        return item.from_dict(itemDict)
+            bandTiff = \
+                f"{bandTiff.replace('*', self.variables[0])}.tif{suffix}"
+            self._createTemplate(bandTiff,
+                                 overviewLevel=overviewLevel,
+                                 bbox=bbox)
+        # loop to process bands as individual xrs
+        das = []
+        for band in self.variables:
+            if band in skip:
+                continue
+            # Form band name from template
+            bandTiff = fileNameBase
+            if url:
+                bandTiff = f'/vsicurl/?list_dir=no&url={fileNameBase}'
+            bandTiff = f"{bandTiff.replace('*', band)}.tif{suffix}"
+            #
+            da = self._lazy_window_read(bandTiff, band, bbox=bbox,
+                                        chunks=(chunkSize, chunkSize),
+                                        overviewLevel=overviewLevel)
+            # Process time dim
+            if time is not None:
+                da = da.expand_dims(dim='time')
+                da = da.assign_coords(time=[time])
+            da = da.assign_coords(band=[band])  # assign coordinate value
+            da['name'] = xrName
+            da = da.assign_coords(_FillValue=self.noDataDict[band])
+            # da = da.chunk({'band': 1, 'x': chunkSize, 'y': chunkSize})
+            das.append(da)
+        #
+        stacked = xarray.concat(das,
+                                dim="band",
+                                coords="minimal",
+                                compat="override",
+                                join="override",
+                                combine_attrs='drop')
+        stacked.rio.write_crs(self.template['crs'], inplace=True)
+        # Add the correct transform
+        if bbox is None:
+            stacked.rio.write_transform(self.template['transform'],
+                                        inplace=True)
+        else:
+            stacked.rio.write_transform(self.template['subsetTransform'],
+                                        inplace=True)
+        return stacked
 
-    def _lazy_open_stack(self, items, skip=[], chunkSize=512,
-                         overviewLevel=-1, fill_value=np.nan):
-        ''' return stackstac xarray dataarray - not debugged '''
-        # fill_value = np.nan
-        self.useStackstac = True
-        myVariables = [x for x in self.variables if x not in skip]
-        # Compute overview resolution consistent with xarray width/npix
-        ny, nx = np.int64(items.properties['proj:shape'] /
-                          overviewLevels[overviewLevel])
-        box = items.properties['proj:bbox']
-        resolution = (np.abs((box[2] - box[0]) / nx),
-                      np.abs((box[3] - box[1]) / ny))
-        # Create xarray using stackstac
-        # fill_value = type(self.dtype)(fill_value)
-        fill_value = getattr(np, self.dtype)(fill_value)
-        print(items, myVariables, fill_value, self.dtype, chunkSize,resolution, self.epsg)
-        da = stackstac.stack(items,
-                             assets=myVariables,
-                             fill_value=fill_value,
-                             dtype=self.dtype,
-                             chunksize=chunkSize,
-                             snap_bounds=False,
-                             xy_coords='center',
-                             resolution=resolution,
-                             rescale=False,
-                             epsg=self.epsg
-                             )
-        da.rio.write_crs(f'epsg:{int(da.epsg)}', inplace=True)
-        da['name'] = 'temp'
-        da.rio.write_crs(f'epsg:{int(da.epsg)}', inplace=True)
-        return da
+    def _bbox_to_window(self, minx, miny, maxx, maxy):
+        """
+        Convert a bounding box (minx, miny, maxx, maxy) in the raster CRS
+        to a rasterio Window, ensuring full bbox coverage (like rio clip-box).
+        """
+        transform = self.template['transform']
 
-    # @dask.delayed
+        # Convert bounds to fractional row/col offsets
+        col_min, row_min = ~transform * (minx, maxy)  # top-left
+        col_max, row_max = ~transform * (maxx, miny)  # bottom-right
+
+        # Expand outward
+        col_off = int(np.floor(col_min))
+        row_off = int(np.floor(row_min))
+        col_max = int(np.ceil(col_max))
+        row_max = int(np.ceil(row_max))
+
+        width = col_max - col_off
+        height = row_max - row_off
+
+        return Window(col_off=col_off, row_off=row_off,
+                      width=width, height=height)
+
+    def _createTemplate(self, bandTiff, bbox=None, overviewLevel=-1):
+        self.template = {}
+        with rasterio.open(bandTiff, overview_level=overviewLevel) as src:
+            self.template['ny'], self.template['nx'] = src.height, src.width
+            self.template['count'] = src.count
+            self.template['transform'] = src.transform
+            self.template['crs'] = src.crs
+            self.template['nodata'] = src.nodata
+            self.template['dtype'] = src.dtypes[0]
+            # Compute the window for the bbox
+            if bbox is None:
+                bbox1 = src.bounds
+                bbox = dict(zip(['minx', 'miny', 'maxx', 'maxy'], bbox1))
+            else:
+                bbox1 = [bbox[x] for x in ['minx', 'miny', 'maxx', 'maxy']]
+            self.template['bbox'] = bbox
+
+            self.template['window'] = self._bbox_to_window(*bbox1)
+
+    def _lazy_window_read(self, path, band, chunks=(4096, 4096),
+                          bbox=None, overviewLevel=-1, masked=True):
+        """
+        Create a lazy DataArray that only reads the bbox when computed that
+        is chunked
+        """
+        height = self.template['ny']
+        width = self.template['nx']
+        dtype = self.template['dtype']
+        transform = self.template['transform']
+        nodata = self.noDataDict[band]
+        # Compute the window for the bbox
+        if bbox is None:
+            win_bbox = Window(0, 0, width, height)
+        else:
+            xmin, ymin, xmax, ymax = \
+                [bbox[k] for k in ['minx', 'miny', 'maxx', 'maxy']]
+            win_bbox = self._bbox_to_window(xmin, ymin, xmax, ymax)
+        #
+        chunky, chunkx = chunks
+        tiles = []
+        # Compute which chunk tiles intersect bbox
+        y0, x0 = int(win_bbox.row_off), int(win_bbox.col_off)
+        h, w = int(win_bbox.height), int(win_bbox.width)
+        nychunks = (height + chunky - 1) // chunky
+        nxchunks = (width + chunkx - 1) // chunkx
+
+        # read function
+        def _read_window(path, window, overviewLevel=-1, masked=True):
+            with rasterio.open(path, overview_level=overviewLevel) as src:
+                data = src.read(indexes=(1), window=window, masked=masked)
+                if src.dtypes[0].startswith('uint'):
+                    data = data.filled(0)
+                else:
+                    data = data.filled(np.nan)
+            return data
+        #
+        for iy in range(nychunks):
+            row_off = iy * chunky
+            win_h = min(chunky, height - row_off)
+            if row_off + win_h <= y0 or row_off >= y0+h:
+                continue  # skip chunks outside bbox
+            row_tiles = []
+            for ix in range(nxchunks):
+                col_off = ix * chunkx
+                win_w = min(chunkx, width - col_off)
+                if col_off + win_w <= x0 or col_off >= x0+w:
+                    continue  # skip chunks outside bbox
+                tile_win = Window(col_off, row_off,
+                                  win_w, win_h).intersection(win_bbox)
+                tile = dask.array.from_delayed(
+                    delayed(_read_window)(path, tile_win,
+                                          overviewLevel, masked),
+                    shape=(tile_win.height, tile_win.width),
+                    dtype=dtype
+                )
+                row_tiles.append(tile)
+            if row_tiles:
+                tiles.append(row_tiles)
+        # Build array
+        lazy_arr = dask.array.block(tiles)[np.newaxis, :, :]  # add band dim
+        xs = (np.arange(width) + 0.5) * transform.a + transform.c
+        ys = (np.arange(height) + 0.5) * transform.e + transform.f
+        # Produce new transform
+        newC = transform.c + win_bbox.col_off * transform.a
+        newR = transform.f + win_bbox.row_off * transform.e
+        self.template['subsetTransform'] = \
+            Affine(transform.a, transform.b, newC,
+                   transform.d, transform.e, newR)
+        da_xr = xarray.DataArray(
+            lazy_arr,
+            dims=("band", "y", "x"),
+            coords={"band": [band], "x": xs[x0:x0+w], "y": ys[y0:y0+h]},
+            attrs={"nodata": nodata},
+            name="stacked"
+        )
+        return da_xr
+
+    def _lazy_window_readNoChunks(self, path, band, bbox=None, noData=None,
+                                  chunks=(1024, 1024), overviewLevel=-1,
+                                  masked=True):
+        """
+        Create a lazy DataArray that only reads the bbox when computed.
+        Save
+        """
+        transform = self.template['transform']
+        count = self.template['count']
+        if bbox is None:
+            window = self.template['window']
+        else:
+            bbox1 = [bbox[x] for x in ['minx', 'miny', 'maxx', 'maxy']]
+            window = self._bbox_to_window(*bbox1)
+        win_width = window.width
+        win_height = window.height
+        nodata = self.noDataDict[band]
+        #
+        # delayed function to read the window
+
+        def _read_window(path, window, overviewLevel=-1, masked=True):
+            with rasterio.open(path, overview_level=overviewLevel) as src:
+                data = src.read(window=window, masked=masked)
+                if self.template['dtype'] == 'uint8':
+                    data = data.filled(0)
+                else:
+                    data = data.filled(np.nan)
+            return data
+        #
+        lazy_arr = dask.array.from_delayed(
+            delayed(_read_window)(path, window, overviewLevel),
+            shape=(count, win_height, win_width),
+            dtype=self.template['dtype']
+        )
+        # Compute new x/y coordinates for the window
+        row_off, col_off = window.row_off, window.col_off
+        x = (np.arange(win_width) +
+             col_off) * transform.a + transform.c + transform.a / 2
+        y = (np.arange(win_height) +
+             row_off) * transform.e + transform.f + transform.e / 2
+        # Combine bands
+        newC = transform.c + col_off * transform.a
+        newR = transform.f + row_off * transform.e
+        self.template['subsetTransform'] = \
+            Affine(transform.a, transform.b, newC,
+                   transform.d, transform.e, newR)
+        da_xr = xarray.DataArray(
+            lazy_arr,
+            dims=("band", "y", "x"),
+            coords={"band": [band], "x": x, "y": y},
+            attrs={"nodata": nodata},
+            name="stacked"
+        )
+        return da_xr
+
     def _lazy_openTiff(self, fileNameBase, masked=True, url=False, time=None,
                        xrName='None', skip=[], overviewLevel=None, suffix='',
-                       chunkSize=1024):
+                       chunkSize=2048):
         '''
         Lazy open of a single velocity product
         Parameters
@@ -417,6 +589,16 @@ class nisarBase2D():
             The time for the product. The default is None.
         xrName : str, optional
             Name for xarray. The default is None
+        skip : list, optional
+            List of bands to skip. The default is [].
+        overviewLevel: int, optional
+            Overview (pyramid) level to read: -1->full res, 0->1/2 res,
+            1->1/4 res....to image dependent max downsampling level.
+            The default is -1 (full res)
+        suffix : str, optional
+            Any suffix that needs to be appended (e.g., for dropbox links)
+        chunkSize : int, optional
+            Chunk size for reading data
         Returns
         -------
         xarray
@@ -446,8 +628,9 @@ class nisarBase2D():
                 da['time'] = [time]
             da['band'] = [band]
             da['name'] = xrName
-            #da['_FillValue'] = self.noDataDict[band]
-            da = da.assign_coords(_FillValue=("band", [self.noDataDict[band]]))
+            da['_FillValue'] = self.noDataDict[band]
+            da = da.assign_coords(
+                _FillValue=("band", np.array([self.noDataDict[band]])))
             das.append(da)
         # Concatenate bands (components)
         return xarray.concat(das, dim='band', join='override',
@@ -954,7 +1137,7 @@ class nisarBase2D():
             else:
                 return None
         try:
-            if type(date) == str:
+            if type(date) is str:
                 date = datetime.strptime(date, '%Y-%m-%d')
         except Exception:
             print('Error: Either invalid date (datetime or "YYYY-MM-DD")')
@@ -1126,7 +1309,6 @@ class nisarBase2D():
         -------
         rgb image.
         '''
-        # print(speed.shape)
         background = np.isnan(speed)
         # type(background))
         # Uniform value
@@ -1134,7 +1316,6 @@ class nisarBase2D():
         # Reduce saturation on low end
         saturation = np.clip((speed/125 + .5)/1.5, 0, 1)
         # Force background to white
-        # print(speed.shape, saturation.shape)
         saturation[background] = 0
         hue = np.log10(np.clip(speed, vmin, vmax)) / \
             (np.log10(vmax) - np.log(vmin))
@@ -1572,7 +1753,6 @@ class nisarBase2D():
                     date2 = date2.strftime(dateFormat)
         #
             tiffRoot = f'{baseName}_{date1}_{date2}_*_{suffix}'
-            print(tiffRoot)
             subset = self.subset.sel(time=time)
             self.writeCloudOptGeo(tiffRoot, myXR=subset, myVars=self.variables)
 
@@ -1748,39 +1928,80 @@ class nisarBase2D():
         vOrig = result.sel(band=band).values.flatten()
         tOrig = self.subset.time.values.flatten()
         t, v = self._removeNoData(tOrig, vOrig, band)
+        if len(t) == 0:
+            t, v = tOrig, vOrig
         # Plot points and lines- options need some work
         return hv.Curve((t, v)).opts(**plotOptions) * \
             hv.Scatter((t, v)).opts(color='red', size=4, framewise=True,
                                     xformatter=dtf, **plotOptions)
 
-    def _view(self, band, imgOptions, plotOptions, ncols=2, date=None,
-              markerColor='red', **kwargs):
-        ''' Setup and return plot '''
-        # Setup the image plot.
+    def _view(self, band, imgOptions=None, plotOptions=None, ncols=2,
+              date=None, markerColor='red', **kwargs):
+        """Display image with interactive point and profile plot."""
+        imgOptions = imgOptions or {}
+        plotOptions = plotOptions or {}
+
+        # Select the image at the specified date
         if date is None:
-            date = self.subset.time[-1]
+            date = np.datetime64(self.subset.time[-1].item(), 'ns')
+            date = self.datetime64ToDatetime(date)
         img = self.subset.sel(band=band).sel(time=date, method='nearest')
-        imgDate = self.datetime64ToDatetime(
-            np.datetime64(img.time.item(0), 'ns')).strftime('%Y-%m-%d')
+        # Image plot
+        x_min, x_max = float(img.x.min()), float(img.x.max())
+        y_min, y_max = float(img.y.min()), float(img.y.max())
+
         if 'title' not in imgOptions:
-            imgOptions['title'] = f'{band} for {imgDate} '
-        imgPlot = img.hvplot.image(rasterize=True, aspect='equal').opts(
-            active_tools=['point_draw'], max_width=500, min_width=300,
-            max_height=800, **imgOptions)
-        # Setup up the time series plot
+            imgOptions['title'] = f'{band} {str(date)[:10]}'
+
+        imgPlot = img.hvplot.image(
+            x='x', y='y', rasterize=True, aspect='equal'
+        ).opts(
+            active_tools=['point_draw'],
+            max_width=500, min_width=300, max_height=800,
+            xlim=(x_min, x_max),
+            ylim=(y_min, y_max),
+            framewise=False,  # Keep axes fixed for image
+            **imgOptions
+        )
+
+        # Initial point for interaction
         xc = self.x0 + self.sx * self.dx * 0.5
         yc = self.y0 + self.sy * self.dy * 0.5
         points = hv.Points(([xc], [yc])).opts(size=6, color=markerColor)
-        pointer = hv.streams.PointDraw(source=points,
-                                       data=points.columns(), num_objects=1)
-        # Create the dynamic map
-        pointer_dmap = hv.DynamicMap(
-            lambda data: self._extractData(data['x'][0], data['y'][0],
-                                           band=band, plotOptions=plotOptions),
-            streams=[pointer]).opts(width=500)
-        # Return the result for display
-        return pn.panel((imgPlot * points +
-                         pointer_dmap).cols(ncols).opts(merge_tools=False))
+        pointer = hv.streams.PointDraw(source=points, data=points.columns(),
+                                       num_objects=1)
 
-
-
+        # Call back for point selection
+        def profile_callback(data):
+            # interpolate points
+            x, y = float(data['x'][0]), float(data['y'][0])
+            result = self._extractData(x, y,
+                                       band=band,
+                                       plotOptions=plotOptions)
+            # Extract y-values from all elements in overlay
+            yvals_list = []
+            if isinstance(result, hv.Overlay):
+                for el in result:
+                    if isinstance(el, (hv.Curve, hv.Scatter)):
+                        # dimension 1 is y
+                        yvals_list.append(el.dimension_values(1))
+            else:
+                yvals_list.append(result.dimension_values(1))
+            # Flatten and filter out non-numeric
+            yvals = np.hstack(
+                [v for v in yvals_list if np.issubdtype(v.dtype, np.number)])
+            if len(yvals) > 0:
+                ymin, ymax = float(np.min(yvals)), float(np.max(yvals))
+            else:
+                ymin, ymax = 0, 1
+            # return result
+            return result.opts(framewise=False, ylim=(ymin, ymax))
+        #
+        # Put it together and return
+        pointer_dmap = hv.DynamicMap(profile_callback,
+                                     streams=[pointer]).opts(width=500)
+        # Overlay image + points (axes independent)
+        overlay = (imgPlot * points).opts(shared_axes=False)
+        # Combine with the profile plot (layout)
+        layout = (overlay + pointer_dmap).opts(shared_axes=False)
+        return pn.panel(layout.cols(ncols).opts(merge_tools=False))

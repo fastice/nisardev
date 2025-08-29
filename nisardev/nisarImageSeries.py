@@ -123,20 +123,24 @@ class nisarImageSeries(nisarBase2D):
     # I/O Routines
     # ------------------------------------------------------------------------
 
-    def readSeriesFromTiff(self, fileNames, url=False, useStack=False,
+    def readSeriesFromTiff(self, fileNames,  bbox=None, url=False,
+                           useStack=False,
                            index1=3, index2=4, dateFormat='%d%b%y',
-                           overviewLevel=-1, suffix='', chunkSize=1024):
+                           overviewLevel=-1, suffix='', chunkSize=2048,
+                           subsetMode=False):
         '''
         read in a tiff product fileNameBase.*.tif. If
         Files can be read as np arrays of xarrays (useXR=True, not well tested)
 
         Parameters
         ----------
-        fileNameBase : str
-            FileNameBase should be of the form
-            pattern.*.abc or pattern*.
+        fileNames : list
+            List of files should be of the form
+            [pattern.*.abc ...] or [pattern*....]
             The wildcard (*) will be filled with the values in myVars
             e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
+        bbox dict, optional
+            bbox to clip the product to {'minx': ...}
         url : bool, optional
             Read data from url
         useStack : Boolean, optional
@@ -151,56 +155,72 @@ class nisarImageSeries(nisarBase2D):
         suffix : str, optional
             Any suffix that needs to be appended (e.g., for dropbox links)
         chunkSize : int, optional
-            Chunksize for xarray. Default is 1024.
+            Chunksize for xarray. Default is 2048.
         dates1 : list, optional
             List of first dates corresponding to filenames. Default is to parse
             dates from filenames.
         dates2 : list, optional
             List of first dates corresponding to filenames. Default is to parse
             dates from filenames.
+        subsetMode: bool, optional
+            If true, save the result as a subset instead of xr
         Returns
         -------
         None.
         '''
         self.imageMaps = []
-        stackTemplate = None
+        self.template = None
+        self.inputParamsSeries = locals()
+        self.fileNames = fileNames
+        for x in ['self', 'subsetMode', 'bbox', 'fileNames']:
+            self.inputParamsSeries.pop(x, None)
         #
         for fileName in fileNames:
             fileName = fileName.replace('.tif', '')
             myImage = nisarImage()
-            myImage.stackTemplate = stackTemplate
-            #date1=date1, date2=date2
+            myImage.template = self.template
             myImage.readDataFromTiff(fileName,
+                                     bbox=bbox,
                                      url=url, useStack=useStack,
                                      index1=index1, index2=index2,
                                      dateFormat=dateFormat,
                                      overviewLevel=overviewLevel,
                                      suffix=suffix, chunkSize=chunkSize)
-            stackTemplate = myImage.stackTemplate
+            self.template = myImage.template
             self.imageMaps.append(myImage)
+            if bbox is None:
+                bbox = myImage.boundingBox(units='m')
         bBox = myImage.boundingBox(units='m')
         self.imageType = myImage.imageType
         # Combine individual bands
         self.nLayers = len(fileNames)
-        time1 = [np.datetime64(x.xr.time1.data.item(), 'ns') 
+        time1 = [np.datetime64(x.xr.time1.data.item(), 'ns')
                  for x in self.imageMaps]
         time2 = [np.datetime64(x.xr.time2.data.item(), 'ns')
                  for x in self.imageMaps]
-        self.xr = xr.concat([x.xr for x in self.imageMaps],
-                            dim='time',
-                            join='override', 
-                            combine_attrs='drop',
-                            coords='minimal', 
-                            compat='override')
-        self.xr = self.xr.assign_coords(time1=("time", np.array(time1)),
-                                        time2=("time", np.array(time2)))
+        myXR = xr.concat([x.xr for x in self.imageMaps],
+                         dim='time',
+                         join='override',
+                         combine_attrs='drop',
+                         coords='minimal',
+                         compat='override')
+        myXR = myXR.assign_coords(time1=("time", np.array(time1)),
+                                  time2=("time", np.array(time2)))
         # ensure that properly sorted in time
-        self.xr = self.xr.sortby(self.xr.time)
+        myXR = myXR.sortby(myXR.time)
         # This forces a subset=entire image, which will trigger initialization
         # Spatial parameters derived from the first imageMap
         self.variables = self.myVariables(self.imageType)
-        self.subSetImage(bBox)
-        self.xr = self.xr.rename('ImageSeries')
+        myXR = myXR.rename('ImageSeries')
+        # save as xr, subset, or as subset if bbox
+        if not subsetMode:
+            self.xr = myXR
+            self.subset = self.xr.copy(deep=True)
+        else:
+            print('fdsfdf')
+            print(myXR)
+            self.subset = myXR
+        # Save times
         self._getTimes()
 
     def readSeriesFromNetCDF(self, cdfFile):
@@ -252,7 +272,16 @@ class nisarImageSeries(nisarBase2D):
         -------
         None.
         '''
-        self.subSetData(bbox)
+        if self.template is not None:
+            self.readSeriesFromTiff(self.fileNames,
+                                    bbox=bbox,
+                                    subsetMode=True,
+                                    **self.inputParamsSeries)
+            #
+            self._mapVariables()
+            self._parseGeoInfo()
+        else:
+            self.subSetData(bbox)
 
     # ------------------------------------------------------------------------
     # Ploting routines.
@@ -623,8 +652,8 @@ class nisarImageSeries(nisarBase2D):
 
         defaultPlotOpts = {
             'image': {'ylabel': 'DN', 'xlabel': 'Date'},
-            'sigma0': {'ylabel': r'$\gamma_o$ (dB)', 'xlabel': 'Date'},
-            'gamma0': {'ylabel': r'$\gamma_o$ (dB)', 'xlabel': 'Date'}
+            'sigma0': {'ylabel': r'$\\sigma_o$ (dB)', 'xlabel': 'Date'},
+            'gamma0': {'ylabel': '$\\gamma_o$ (dB)', 'xlabel': 'Date'}
         }
         band = str(self.subset.band.data[0])
         print(band)
