@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "nisardev"
-version = "0.0.9"
+version = "0.0.10"
 description = "Tools for NISAR/GrIMP L3 products"
 authors = ["Ian Joughin <ian@apl.washington.edu>"]
 license = "MIT"
