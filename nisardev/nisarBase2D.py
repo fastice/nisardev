@@ -27,6 +27,7 @@ import math
 from bokeh.models.formatters import DatetimeTickFormatter
 from dask import delayed
 from rasterio.windows import Window
+import copy
 overviewLevels = dict(zip(range(-1, 10), 2**np.arange(0, 11)))
 
 
@@ -55,10 +56,11 @@ class nisarBase2D():
         self.variables = None
         self.flipY = True
         self.dtype = 'float32'
-        self.useStackstac = False
+        # self.useStackstac = False
         self.xforms = {}  # Cached pyproj transforms
         self.template = template
         self.fileNameBase = None
+        #print(numWorkers)
         dask.config.set(num_workers=numWorkers)
 
     #
@@ -97,6 +99,11 @@ class nisarBase2D():
 
     @abstractmethod
     def inspectData():
+        ''' Abstract inspect to create a new version of this class.'''
+        pass
+
+    @abstractmethod
+    def subsetData():
         ''' Abstract inspect to create a new version of this class.'''
         pass
 
@@ -210,15 +217,24 @@ class nisarBase2D():
         Copy (deep) of itself
         '''
         # Make an empty instance
+        print(1)
         new = self.reproduce()
         # Deep copy the xr
         newXR = self.xr.copy(deep=True)
+        print(2)
         new.initXR(newXR)
         # Get the bouding box and subset
         bbox = self._xrBoundingBox(self.subset)
-        new.subSetData(bbox)
+        new.template = copy.deepcopy(self.template)
+        new.nLayers = self.nLayers
+        new.fileNames = copy.deepcopy(self.fileNames)
+        new.inputParamsSeries = copy.deepcopy(self.inputParamsSeries)
+        print(bbox)
+        print(3)
+        new.subsetData(bbox)
         # If the data have already been loaded, force a reload.
-        if self.subset.chunks is None:
+        print(4)
+        if self.subset.chunks is None and self.template is None:
             new.subset.load()
             new._mapVariables()  # Forces remapping to non dask
         new._getTimes()
@@ -279,7 +295,7 @@ class nisarBase2D():
         self._parseGeoInfo()
         self._mapVariables()
 
-    def subSetData(self, bbox):
+    def _subsetData(self, bbox):
         ''' Subset dataArray using a box to crop limits
         Parameters
         ----------
@@ -363,9 +379,9 @@ class nisarBase2D():
                 bandTiff = f'/vsicurl/?list_dir=no&url={fileNameBase}'
             bandTiff = f"{bandTiff.replace('*', band)}.tif{suffix}"
             #
-            da = self._lazy_window_read(bandTiff, band, bbox=bbox,
-                                        chunks=(chunkSize, chunkSize),
-                                        overviewLevel=overviewLevel)
+            da = self._lazy_window_readNoChunks(bandTiff, band, bbox=bbox,
+                                                chunks=(chunkSize, chunkSize),
+                                                overviewLevel=overviewLevel)
             # Process time dim
             if time is not None:
                 da = da.expand_dims(dim='time')
@@ -1954,23 +1970,21 @@ class nisarBase2D():
             imgOptions['title'] = f'{band} {str(date)[:10]}'
 
         imgPlot = img.hvplot.image(
-            x='x', y='y', rasterize=True, aspect='equal'
+            x='x', y='y',  aspect='equal', rasterize=True,
         ).opts(
             active_tools=['point_draw'],
-            max_width=500, min_width=300, max_height=800,
+            max_width=500, min_width=400, max_height=800,
             xlim=(x_min, x_max),
             ylim=(y_min, y_max),
             framewise=False,  # Keep axes fixed for image
             **imgOptions
         )
-
         # Initial point for interaction
         xc = self.x0 + self.sx * self.dx * 0.5
         yc = self.y0 + self.sy * self.dy * 0.5
         points = hv.Points(([xc], [yc])).opts(size=6, color=markerColor)
         pointer = hv.streams.PointDraw(source=points, data=points.columns(),
                                        num_objects=1)
-
         # Call back for point selection
         def profile_callback(data):
             # interpolate points
@@ -2004,4 +2018,5 @@ class nisarBase2D():
         overlay = (imgPlot * points).opts(shared_axes=False)
         # Combine with the profile plot (layout)
         layout = (overlay + pointer_dmap).opts(shared_axes=False)
-        return pn.panel(layout.cols(ncols).opts(merge_tools=False))
+        #return overlay
+        return pn.panel(layout.cols(ncols).opts(merge_tools=False)).servable()

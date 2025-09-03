@@ -12,6 +12,7 @@ from nisardev import nisarBase2D, nisarImage
 from osgeo import gdal
 import xarray as xr
 import numpy as np
+import warnings
 # from dask.diagnostics import ProgressBar
 
 imageTypes = ['image', 'sigma0', 'gamma0']
@@ -28,7 +29,7 @@ class nisarImageSeries(nisarBase2D):
     legendFontSize = 12  # Font size for legends
     titleFontSize = 15  # Font size for legends
 
-    def __init__(self, verbose=True,  imageType=None, numWorkers=2):
+    def __init__(self, verbose=True,  imageType=None, numWorkers=2, **kwds):
         '''
         Instantiate nisarImageSeries object.
         Parameters
@@ -39,7 +40,7 @@ class nisarImageSeries(nisarBase2D):
         -------
         None.
         '''
-        nisarBase2D.__init__(self, numWorkers=numWorkers)
+        super().__init__(self, numWorkers=numWorkers, **kwds)
         self.image, self.sigma0, self.gamma0 = [None] * 3
         #
         self.myVariables(imageType)
@@ -47,6 +48,7 @@ class nisarImageSeries(nisarBase2D):
         self.verbose = verbose
         self.noDataDict = dict(zip(imageTypes, [0, -30., -30.]))
         self.nLayers = 0  # Number of time layers
+        self.numWorkers = numWorkers
 
     def myVariables(self, imageType):
         '''
@@ -144,7 +146,7 @@ class nisarImageSeries(nisarBase2D):
         url : bool, optional
             Read data from url
         useStack : Boolean, optional
-            Use stackstac for full res data, overviews will xr.
+            Repeat headers for quicker open. The default is True.
             The default is True.
         index1, index2 : location of dates in filename with seperated by _
         dateFormat : format code to strptime
@@ -177,7 +179,7 @@ class nisarImageSeries(nisarBase2D):
         #
         for fileName in fileNames:
             fileName = fileName.replace('.tif', '')
-            myImage = nisarImage()
+            myImage = nisarImage(numWorkers=self.numWorkers)
             myImage.template = self.template
             myImage.readDataFromTiff(fileName,
                                      bbox=bbox,
@@ -217,8 +219,6 @@ class nisarImageSeries(nisarBase2D):
             self.xr = myXR
             self.subset = self.xr.copy(deep=True)
         else:
-            print('fdsfdf')
-            print(myXR)
             self.subset = myXR
         # Save times
         self._getTimes()
@@ -262,7 +262,31 @@ class nisarImageSeries(nisarBase2D):
         newSeries._getTimes()
         return newSeries
 
+    def subSetData(self, bbox):
+        warnings.warn('\nsubSetData deprecated. Use subsetData',
+                      category=DeprecationWarning,
+                      stacklevel=2)
+        self.subsetImage(bbox)
+
     def subSetImage(self, bbox):
+        warnings.warn('\nsubSetImage deprecated. Use subsetImage',
+                      category=DeprecationWarning,
+                      stacklevel=2)
+        self.subsetImage(bbox)
+
+    def subsetData(self, bbox):
+        ''' Subset dataArray to a bounding box
+        Parameters
+        ----------
+        bbox : dict
+            {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
+        Returns
+        -------
+        None.
+        '''
+        self.subsetImage(bbox)
+
+    def subsetImage(self, bbox):
         ''' Subset dataArray to a bounding box
         Parameters
         ----------
@@ -281,7 +305,7 @@ class nisarImageSeries(nisarBase2D):
             self._mapVariables()
             self._parseGeoInfo()
         else:
-            self.subSetData(bbox)
+            self._subsetData(bbox)
 
     # ------------------------------------------------------------------------
     # Ploting routines.
@@ -656,7 +680,6 @@ class nisarImageSeries(nisarBase2D):
             'gamma0': {'ylabel': '$\\gamma_o$ (dB)', 'xlabel': 'Date'}
         }
         band = str(self.subset.band.data[0])
-        print(band)
         # Customize other common options
         for key in defaultImgOpts[band]:
             if key not in imgOpts:
@@ -670,5 +693,4 @@ class nisarImageSeries(nisarBase2D):
                 plotOpts[key] = defaultPlotOpts[band][key]
         if 'title' not in plotOpts:
             plotOpts['title'] = f'{band} time series'
-
         return self._view(band, imgOpts, plotOpts, date=date)
