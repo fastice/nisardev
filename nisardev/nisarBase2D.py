@@ -60,7 +60,6 @@ class nisarBase2D():
         self.xforms = {}  # Cached pyproj transforms
         self.template = template
         self.fileNameBase = None
-        #print(numWorkers)
         dask.config.set(num_workers=numWorkers)
 
     #
@@ -158,7 +157,7 @@ class nisarBase2D():
                                          skip=skip,
                                          overviewLevel=overviewLevel,
                                          suffix=suffix,
-                                         chunkSize=chunkSize)
+                                         )
         else:
             myXR = self._lazy_openTiff(fileNameBase, url=url, masked=masked,
                                        time=time, xrName=xrName, skip=skip,
@@ -217,11 +216,9 @@ class nisarBase2D():
         Copy (deep) of itself
         '''
         # Make an empty instance
-        print(1)
         new = self.reproduce()
         # Deep copy the xr
         newXR = self.xr.copy(deep=True)
-        print(2)
         new.initXR(newXR)
         # Get the bouding box and subset
         bbox = self._xrBoundingBox(self.subset)
@@ -229,11 +226,8 @@ class nisarBase2D():
         new.nLayers = self.nLayers
         new.fileNames = copy.deepcopy(self.fileNames)
         new.inputParamsSeries = copy.deepcopy(self.inputParamsSeries)
-        print(bbox)
-        print(3)
         new.subsetData(bbox)
         # If the data have already been loaded, force a reload.
-        print(4)
         if self.subset.chunks is None and self.template is None:
             new.subset.load()
             new._mapVariables()  # Forces remapping to non dask
@@ -322,7 +316,7 @@ class nisarBase2D():
 
     def _lazyOpenProduct(self, fileNameBase, bbox=None, masked=True, url=False,
                          time=None, xrName='None', skip=[], overviewLevel=None,
-                         suffix='', chunkSize=2048):
+                         suffix=''):
         '''
         Lazy open of a single velocity product, skipping headers if a template
         exists
@@ -349,8 +343,6 @@ class nisarBase2D():
           The default is -1 (full res)
         suffix : str, optional
             Any suffix that needs to be appended (e.g., for dropbox links)
-        chunkSize : int, optional
-            Chunk size for reading data
         Returns
         -------
         xarray
@@ -380,7 +372,6 @@ class nisarBase2D():
             bandTiff = f"{bandTiff.replace('*', band)}.tif{suffix}"
             #
             da = self._lazy_window_readNoChunks(bandTiff, band, bbox=bbox,
-                                                chunks=(chunkSize, chunkSize),
                                                 overviewLevel=overviewLevel)
             # Process time dim
             if time is not None:
@@ -389,7 +380,6 @@ class nisarBase2D():
             da = da.assign_coords(band=[band])  # assign coordinate value
             da['name'] = xrName
             da = da.assign_coords(_FillValue=self.noDataDict[band])
-            # da = da.chunk({'band': 1, 'x': chunkSize, 'y': chunkSize})
             das.append(da)
         #
         stacked = xarray.concat(das,
@@ -529,7 +519,7 @@ class nisarBase2D():
         return da_xr
 
     def _lazy_window_readNoChunks(self, path, band, bbox=None, noData=None,
-                                  chunks=(1024, 1024), overviewLevel=-1,
+                                  overviewLevel=-1,
                                   masked=True):
         """
         Create a lazy DataArray that only reads the bbox when computed.
@@ -545,9 +535,9 @@ class nisarBase2D():
         win_width = window.width
         win_height = window.height
         nodata = self.noDataDict[band]
+
         #
         # delayed function to read the window
-
         def _read_window(path, window, overviewLevel=-1, masked=True):
             with rasterio.open(path, overview_level=overviewLevel) as src:
                 data = src.read(window=window, masked=masked)
