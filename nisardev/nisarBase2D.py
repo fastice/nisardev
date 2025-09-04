@@ -192,7 +192,7 @@ class nisarBase2D():
         '''
         if self.variables is None:
             self.variables = list(XR.band.data)
-            print('self.var', self.variables)
+            #print('self.var', self.variables)
         # initially subset=full
         self.xr = XR
         self.subset = XR
@@ -316,7 +316,7 @@ class nisarBase2D():
 
     def _lazyOpenProduct(self, fileNameBase, bbox=None, masked=True, url=False,
                          time=None, xrName='None', skip=[], overviewLevel=None,
-                         suffix=''):
+                         suffix='', **kw):
         '''
         Lazy open of a single velocity product, skipping headers if a template
         exists
