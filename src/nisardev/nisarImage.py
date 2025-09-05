@@ -11,6 +11,7 @@ from nisardev import nisarBase2D
 import os
 from datetime import datetime
 from osgeo import gdal_array
+import warnings
 
 imageTypes = ['image', 'sigma0', 'gamma0']
 
@@ -25,7 +26,7 @@ class nisarImage(nisarBase2D):
     titleFontSize = 15  # Font size for legends
 
     def __init__(self, imageType=None, verbose=True,
-                 noData=None, dtype=None, numWorkers=2):
+                 noData=None, dtype=None, numWorkers=2, **kwds):
         '''
         Instantiate nisarVel object. Possible bands are 'image', 'sigma0',
         'gamma0', or user defined.
@@ -42,7 +43,7 @@ class nisarImage(nisarBase2D):
         -------
         None.
         '''
-        nisarBase2D.__init__(self, numWorkers=numWorkers)
+        super().__init__(numWorkers=numWorkers, **kwds)
         # self.image, self.sigma0, self.gamma0 = [None] * 3
         if type(imageType) is not str and imageType is not None:
             print('Warning invalid image type')
@@ -161,8 +162,9 @@ class nisarImage(nisarBase2D):
            bbox to clip the product to {'minx': ...}
         url : bool, optional
             Read data from url
-        useStack : boolean, optional
-            Uses stackstac for full resolution data. The default is True.
+        useStack : Boolean, optional
+            Repeat headers for quicker open. The default is True.
+            The default is True.
         dateFormat : str, optional
             Format code to strptime from file name. Default is %d%b%y',
         index1, index2 : location of dates in filename with seperated by _
@@ -192,11 +194,6 @@ class nisarImage(nisarBase2D):
                                          date1=date1, date2=date2)
         self.variables = self.myVariables(self.imageType)
         #
-        # if 'image' in self.variables:
-        #     fill_value = 0
-        # else:
-        #     fill_value = np.nan
-        #
         self.inputParams = locals()
         for x in ['self', 'fileNameBase', 'useDT',
                   'readSpeed', 'useVelocity', 'useErrors',
@@ -219,7 +216,7 @@ class nisarImage(nisarBase2D):
         self.xr = self.xr.rename(self.imageType)
         self.fileNameBase = fileNameBase  # save filenameBase
         # force intial subset to entire image
-        self.subSetData(self.boundingBox(units='m'))
+        self._subsetData(self.boundingBox(units='m'))
 
     def readDataFromNetCDF(self, cdfFile):
         '''
@@ -242,7 +239,31 @@ class nisarImage(nisarBase2D):
         self.time1 = [np.datetime64(self.xr.time1.item(), 'ns')]
         self.time2 = [np.datetime64(self.xr.time2.item(), 'ns')]
 
+    def subSetData(self, bbox):
+        warnings.warn('\nsubSetData deprecated. Use subsetData',
+                      category=DeprecationWarning,
+                      stacklevel=2)
+        self.subsetImage(bbox)
+
     def subSetImage(self, bbox):
+        warnings.warn('\nsubSetImage deprecated. Use subsetImage',
+                      category=DeprecationWarning,
+                      stacklevel=2)
+        self.subsetImage(bbox)
+
+    def subsetData(self, bbox):
+        ''' Subset dataArray to a bounding box
+        Parameters
+        ----------
+        bbox : dict
+            {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
+        Returns
+        -------
+        None.
+        '''
+        self.subsetImage(bbox)
+
+    def subsetImage(self, bbox):
         ''' Subset dataArray to a bounding box
         Parameters
         ----------
@@ -261,12 +282,11 @@ class nisarImage(nisarBase2D):
             subset['time1'] = self.subset['time1'].data
             subset['time2'] = self.subset['time2'].data
             #
-            print('here')
             self.subset = subset
             self._mapVariables()
             self._parseGeoInfo()
         else:
-            self.subSetData(bbox)
+            self._subsetData(bbox)
 
     #
     # ---- Dates routines.

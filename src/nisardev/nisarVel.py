@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
 from osgeo import gdal
 import xarray as xr
+import warnings
 
 
 class nisarVel(nisarBase2D):
@@ -33,7 +34,7 @@ class nisarVel(nisarBase2D):
     legendFontSize = 12  # Font size for legends
     titleFontSize = 15  # Font size for legends
 
-    def __init__(self, verbose=True, epsg=None, template=None):
+    def __init__(self, verbose=True, epsg=None, template=None, **kwds):
         '''
         Instantiate nisarVel object. Possible bands are 'vx', 'vy','v', 'ex',
         'ey', 'e'
@@ -45,7 +46,7 @@ class nisarVel(nisarBase2D):
         -------
         None.
         '''
-        nisarBase2D.__init__(self, epsg=epsg, template=template)
+        super().__init__(epsg=epsg, template=template, **kwds)
         self.vx, self.vy, self.vv, self.ex, self.ey, self.dT = [None] * 6
         self.variables = None
         self.verbose = verbose
@@ -259,7 +260,7 @@ class nisarVel(nisarBase2D):
         self.xr = self.xr.rename('VelocityMap')
         self.fileNameBase = fileNameBase  # save filenameBase
         # force intial subset to entire image
-        self.subSetData(self.boundingBox(units='m'))
+        self._subsetData(self.boundingBox(units='m'))
 
     def readDataFromNetCDF(self, cdfFile):
         '''
@@ -289,7 +290,34 @@ class nisarVel(nisarBase2D):
         self.time1 = [np.datetime64(self.xr.time1.item(), 'ns')]
         self.time2 = [np.datetime64(self.xr.time2.item(), 'ns')]
 
+    def subSetData(self, bbox, useVelocity=True):
+        warnings.warn('\nsubSetData deprecated. Use subsetData',
+                      category=DeprecationWarning,
+                      stacklevel=2)
+        self.subsetVel(bbox, useVelocity=useVelocity)
+
     def subSetVel(self, bbox, useVelocity=True):
+        warnings.warn('\nsubSetVel deprecated. Use subsetVel',
+                      category=DeprecationWarning,
+                      stacklevel=2)
+        #
+        self.subsetVel(bbox, useVelocity=useVelocity)
+
+    def subsetData(self, bbox, useVelocity=True):
+        ''' Subset dataArray to a bounding box
+        Parameters
+        ----------
+        bbox : dict
+            {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
+        useVelocity: bool, optional
+            compute speed from vx, vy
+        Returns
+        -------
+        None.
+        '''
+        self.subsetVel(bbox, useVelocity=useVelocity)
+
+    def subsetVel(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
         Parameters
         ----------
@@ -311,8 +339,8 @@ class nisarVel(nisarBase2D):
             subset['time1'] = self.subset['time1'].data
             subset['time2'] = self.subset['time2'].data
             #
-            self._mapVariables()
             self.subset = subset
+            self._mapVariables()
             if not self.readSpeed and self.useVelocity:
                 self._addSpeed(bandType='v', subset=True)
             if self.useErrors:
@@ -323,7 +351,7 @@ class nisarVel(nisarBase2D):
             #
         else:
             # using rioxarray, so use clipbox method
-            self.subSetData(bbox)
+            self._subsetData(bbox)
 
     # ------------------------------------------------------------------------
     # Dates routines.

@@ -14,6 +14,7 @@ from nisardev import nisarBase2D, nisarVel
 from osgeo import gdal
 import xarray as xr
 from dask.diagnostics import ProgressBar
+import warnings
 # from datetime import datetime
 
 
@@ -33,7 +34,7 @@ class nisarVelSeries(nisarBase2D):
     legendFontSize = 12  # Font size for legends
 #    titleFontSize = 16  # Font size for legends
 
-    def __init__(self, verbose=True, epsg=None):
+    def __init__(self, verbose=True, epsg=None, numWorkers=3, **kwds):
         '''
         Instantiate nisarVel object. Possible bands are 'vx', 'vy','v', 'ex',
         'ey', 'e'
@@ -45,7 +46,7 @@ class nisarVelSeries(nisarBase2D):
         -------
         None.
         '''
-        nisarBase2D.__init__(self, epsg=epsg)
+        super().__init__(epsg=epsg, **kwds)
         self.vx, self.vy, self.vv, self.ex, self.ey = [None] * 5
         self.variables = None
         self.verbose = verbose
@@ -54,6 +55,7 @@ class nisarVelSeries(nisarBase2D):
         self.gdalType = gdal.GDT_Float32  # data type for velocity products
         self.dtype = 'float32'
         self.nLayers = 0  # Number of time layers
+        self.numWorkers = numWorkers
 
     def myVariables(self, useVelocity, useErrors, useDT, readSpeed=False):
         '''
@@ -208,7 +210,9 @@ class nisarVelSeries(nisarBase2D):
         self.template = None
         with ProgressBar():
             for fileName in fileNames:
-                myVel = nisarVel(epsg=self.epsg, template=self.template)
+                myVel = nisarVel(epsg=self.epsg,
+                                 template=self.template,
+                                 numWorkers=self.numWorkers)
                 myVel.readDataFromTiff(fileName,
                                        bbox=bbox,
                                        useVelocity=useVelocity,
@@ -327,7 +331,34 @@ class nisarVelSeries(nisarBase2D):
         newSeries._getTimes()
         return newSeries
 
+    def subSetData(self, bbox, useVelocity=True):
+        warnings.warn('\nsubSetData deprecated. Use subsetData',
+                      category=DeprecationWarning,
+                      stacklevel=2)
+        self.subsetVel(bbox, useVelocity=useVelocity)
+
     def subSetVel(self, bbox, useVelocity=True):
+        warnings.warn('\nsubSetVel deprecated. Use subsetVel',
+                      category=DeprecationWarning,
+                      stacklevel=2)
+        #
+        self.subsetVel(bbox, useVelocity=useVelocity)
+
+    def subsetData(self, bbox, useVelocity=True):
+        ''' Subset dataArray to a bounding box
+        Parameters
+        ----------
+        bbox : dict
+            {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
+        useVelocity: bool, optional
+            compute speed from vx, vy
+        Returns
+        -------
+        None.
+        '''
+        self.subsetVel(bbox, useVelocity=useVelocity)
+
+    def subsetVel(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
         Parameters
         ----------
@@ -348,7 +379,7 @@ class nisarVelSeries(nisarBase2D):
             self._mapVariables()
             self._parseGeoInfo()
         else:
-            self.subSetData(bbox)
+            self._subsetData(bbox)
 
     # ------------------------------------------------------------------------
     # Ploting routines.
