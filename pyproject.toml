@@ -1,17 +1,24 @@
 [project]
 name = "nisardev"
 version = "0.1.0"
-authors = [{name = "Scott Henderson", email = "3924836+scottyhq@users.noreply.github.com"}]
+description = "Tools for nisar cal/val activities and cryo notebooks"
+authors = [
+    { name = "Ian Joughin" },
+    { name = "Scott Henderson", email = "3924836+scottyhq@users.noreply.github.com" },
+]
 requires-python = ">= 3.11"
 dependencies = [
-    "gdal<4",
+    "gdal",
     "rioxarray",
     "dask",
     "pyproj",
     "matplotlib",
     "holoviews",
-    "pandas"
+    "pandas",
 ]
+
+[project.urls]
+repository = "https://github.com/fastice/grimpfunc.git"
 
 [build-system]
 build-backend = "hatchling.build"
@@ -20,6 +27,7 @@ requires = ["hatchling"]
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64"]
+preview = ["pixi-build"]
 
 [tool.pixi.pypi-dependencies]
 nisardev = { path = ".", editable = true }
@@ -33,4 +41,32 @@ matplotlib = "*"
 holoviews = "*"
 pandas = "*"
 
-[tool.pixi.tasks]
+[tool.pixi.environments]
+default = {features = [], solve-group = "default"}
+dev = { features = ["dev"], solve-group = "default"}
+
+[tool.pixi.feature.dev.dependencies]
+pytest = "*"
+
+[tool.pixi.feature.dev.tasks]
+test = "pytest -q"
+
+[tool.pixi.package]
+name = "nisardev"
+version = "0.1.0"
+
+[tool.pixi.package.build.backend]
+name = "pixi-build-python"
+version = "==0.3.2"
+
+[tool.pixi.package.host-dependencies]
+hatchling = "*"
+
+[tool.pixi.package.run-dependencies]
+gdal = "*"
+rioxarray = "*"
+dask = "*"
+pyproj = "*"
+matplotlib = "*"
+holoviews = "*"
+pandas = "*"
