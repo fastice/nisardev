@@ -10,4 +10,4 @@ from nisardev.nisarBase2D import nisarBase2D
 from nisardev.nisarImage import nisarImage
 from nisardev.nisarImageSeries import nisarImageSeries
 from nisardev.nisarVel import nisarVel
-from nisardev.nisarVelSeries import nisarVelSeries 
+from nisardev.nisarVelSeries import nisarVelSeries

@@ -1,38 +1,74 @@
-[tool.poetry]
+[project]
 name = "nisardev"
-version = "0.0.10"
+version = "0.1.0"
 description = "Tools for NISAR/GrIMP L3 products"
-authors = ["Ian Joughin <ian@apl.washington.edu>"]
 license = "MIT"
-readme = "README.md"
-homepage = "https://github.com/fastice/nisardev"
-repository = "https://github.com/fastice/nisardev"
 keywords = ["SAR", "NISAR"]
+authors = [
+    { name = "Ian Joughin", email = "ian@apl.washington.edu" },
+    { name = "Scott Henderson", email = "3924836+scottyhq@users.noreply.github.com" },
+]
+requires-python = ">= 3.11"
+dependencies = [
+    "gdal",
+    "rioxarray",
+    "dask",
+    "pyproj",
+    "matplotlib",
+    "holoviews",
+    "pandas",
+]
 
-[tool.poetry.dependencies]
-# Its best to handle these through the enviroment file at
-# https://github.com/fastice/GrIMPNotebooks/blob/master/binder/environment.yml
-# Otherwise pip may cause conflicts with conda packages
-#python = ">=3.7"
-#gdal = { version = "*", optional = true }
-#pyproj = { version = "*", optional = true }
-#matplotlib = { version = "*", optional = true }
-#dask = { version = "*", optional = true }
-#xarray = { version = "*", optional = true }
-#rioxarray = { version = "*", optional = true }
-#stackstac = "^0.2"
-#rio-stac = { git = "https://github.com/developmentseed/rio-stac.git", branch = "main" }
-#holoviews = { version = "*", optional = true }
-[tool.poetry.dev-dependencies]
-ipython = "*"
-
-[tool.poetry-dynamic-versioning]
-enable = true
-vcs = "git"
-style = "semver"
+[project.urls]
+repository = "https://github.com/fastice/nisardev.git"
 
 [build-system]
-requires = ["setuptools", "poetry-core>=1.0.9"]
-build-backend = "poetry.core.masonry.api"
-#requires = ["setuptools", "poetry-core @ git+https://github.com/python-poetry/poetry-core.git@master"]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
 
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+preview = ["pixi-build"]
+
+[tool.pixi.pypi-dependencies]
+nisardev = { path = ".", editable = true }
+
+[tool.pixi.dependencies]
+gdal = "*"
+rioxarray = "*"
+dask = "*"
+pyproj = "*"
+matplotlib = "*"
+holoviews = "*"
+pandas = "*"
+
+[tool.pixi.environments]
+default = {features = [], solve-group = "default"}
+dev = { features = ["dev"], solve-group = "default"}
+
+[tool.pixi.feature.dev.dependencies]
+pytest = "*"
+
+[tool.pixi.feature.dev.tasks]
+test = "pytest -q"
+
+[tool.pixi.package]
+name = "nisardev"
+version = "0.1.0"
+
+[tool.pixi.package.build.backend]
+name = "pixi-build-python"
+version = "==0.3.2"
+
+[tool.pixi.package.host-dependencies]
+hatchling = "*"
+
+[tool.pixi.package.run-dependencies]
+gdal = "*"
+rioxarray = "*"
+dask = "*"
+pyproj = "*"
+matplotlib = "*"
+holoviews = "*"
+pandas = "*"
