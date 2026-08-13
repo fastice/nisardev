@@ -36,12 +36,17 @@ class cvPoints:
         manipulate cv points.
         Parameters
         ----------
-        cvFile : TYPE, optional
-            DESCRIPTION. The default is None.
-        epsg : TYPE, optional
-            DESCRIPTION. The default is None.
-        wktFile : TYPE, optional
-            DESCRIPTION. Wktfile instead of epsg None.
+        cvFile : str or list of str, optional
+            Path to a cal/val points file, or a list of paths for
+            time-varying GPS point files. The default is None.
+        epsg : int, optional
+            EPSG code for the output projection (e.g., 3413 for north polar
+            stereographic, 3031 for south). If None, the hemisphere of the
+            first CV point is used to choose 3413 or 3031 automatically.
+            The default is None.
+        wktFile : str, optional
+            Path to a WKT file defining the output projection. Mutually
+            exclusive with epsg. The default is None.
         Returns
         -------
         None.
@@ -87,11 +92,7 @@ class cvPoints:
 
     def checkCVFile(self):
         '''
-        Check cvfile exists.
-        Parameters
-        ----------
-        cvFile : str
-            Name of cv file with cal/val points.
+        Check that self.cvFile exists on disk.  Calls myError if it does not.
         Returns
         -------
         None.
@@ -108,7 +109,16 @@ class cvPoints:
                 myError("cvFile: {0:s} does not exist".format(cvFile))
 
     def readWKT(self, wktFile):
-        ''' get wkt from a file '''
+        '''Read WKT projection string from a file.
+        Parameters
+        ----------
+        wktFile : str
+            Path to the WKT file.
+        Returns
+        -------
+        str
+            WKT string (first line of the file).
+        '''
         with open(wktFile, 'r') as fp:
             return fp.readline()
 
@@ -136,7 +146,13 @@ class cvPoints:
     #
 
     def readCVs(self, cvFile=None):
-        ''' Read either single static file or multiple time varying files'''
+        '''Read either a single static CV file or a list of time-varying files.
+        Parameters
+        ----------
+        cvFile : str or list of str, optional
+            Path(s) to CV file(s). If None, uses self.cvFile. The default
+            is None.
+        '''
         self.setCVFile(cvFile)
         self.checkCVFile()
         if self.static:
@@ -153,7 +169,15 @@ class cvPoints:
         self.velocityForDateRange('1900-01-01', '2100-01-01')
 
     def velocityForDateRange(self, date1, date2):
-        ''' Update velocity with new date range'''
+        '''Recompute mean velocity for each GPS point over a date range.
+        Used internally by timeSeriesDifferences.
+        Parameters
+        ----------
+        date1 : str ('YYYY-MM-DD') or datetime
+            Start of date window.
+        date2 : str ('YYYY-MM-DD') or datetime
+            End of date window.
+        '''
         for var in ['lat', 'lon', 'vx', 'vy']:
             setattr(self, var, [])
 
@@ -230,17 +254,23 @@ class cvPoints:
 
     def writeCVs(self, cvFileOut, fp=None, comment=None, keepOpen=False):
         '''
-        Write a CV file as a list of points lat,lon,z,vx,vy,vz with a
+        Write non-culled CV points as a space-delimited text file.
         Parameters
         ----------
         cvFileOut : str
-            Name of cvFile in not already set. The default is None.
-        optional
-            fpOut: ignore file name an using open file pointer
+            Output filename.
+        fp : file object, optional
+            Open file pointer to write into instead of opening cvFileOut.
+            The default is None (opens cvFileOut).
+        comment : str, optional
+            Comment string appended to self.header before writing.
+            The default is None.
+        keepOpen : bool, optional
+            If True, return the open file pointer instead of closing it.
+            The default is False.
         Returns
         -------
-        None.
-
+        None, or open file pointer if keepOpen=True.
         '''
         if comment is not None:
             self.header.append(comment)
@@ -283,11 +313,17 @@ class cvPoints:
 
     def vRangeCVs(self, minv, maxv):
         '''
-        Return bool array of points in a specified velocity range (minv,maxv).
+        Return bool array of points with speed in [minv, maxv).
+        Parameters
+        ----------
+        minv : float
+            Minimum speed (inclusive).
+        maxv : float
+            Maximum speed (exclusive).
         Returns
         -------
-        bool
-            List of points in range (vmin,vmax) indicated by T & F val.
+        bool ndarray
+            True where minv <= vv < maxv.
         '''
         return np.logical_and(self.vv >= minv, self.vv < maxv)
 
@@ -313,11 +349,17 @@ class cvPoints:
 
     def NVRangeCVs(self, minv, maxv):
         '''
-        Compute number of cv points in range (minv,maxv)
+        Count CV points with speed in [minv, maxv).
+        Parameters
+        ----------
+        minv : float
+            Minimum speed (inclusive).
+        maxv : float
+            Maximum speed (exclusive).
         Returns
         -------
         int
-            Number of points in range.
+            Number of points in the speed range.
         '''
         return sum(self.vRangeCVs(minv, maxv))
 
@@ -346,12 +388,42 @@ class cvPoints:
 
     @_cvVels
     def vRangeData(self, vel, minv, maxv, units='m', date=None):
-        ''' Get velocity from vel map for points in range (vmin,vmax).'''
+        '''Interpolate velocity from vel at CV points in speed range [minv, maxv).
+        Parameters
+        ----------
+        vel : nisarVel or nisarVelSeries
+            Velocity map to interpolate from.
+        minv : float
+            Minimum speed (inclusive).
+        maxv : float
+            Maximum speed (exclusive).
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
+        date : str or datetime, optional
+            Date to interpolate for series data. The default is None.
+        Returns
+        -------
+        np.ndarray
+            Interpolated velocity values.
+        '''
         return self.xyVRange(minv, maxv)
 
     @_cvVels
     def vAllData(self, vel, units='m', date=None):
-        ''' Get velocity from vel map for all points.'''
+        '''Interpolate velocity from vel at all CV point locations.
+        Parameters
+        ----------
+        vel : nisarVel or nisarVelSeries
+            Velocity map to interpolate from.
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
+        date : str or datetime, optional
+            Date to interpolate for series data. The default is None.
+        Returns
+        -------
+        np.ndarray
+            Interpolated velocity values.
+        '''
         return self.xyAll()
 
     #
@@ -445,7 +517,26 @@ class cvPoints:
 
     @_stats
     def vRangeStats(self, vel, minv, maxv, date=None, units='m'):
-        ''' get stats for cvpoints in range (minv,maxv) '''
+        '''Compute mean, sigma and RMS differences between vel and GPS for
+        CV points in speed range [minv, maxv).  The @_stats decorator adds
+        the keyword arguments table=False, absError=1, percentError=0.03.
+        Parameters
+        ----------
+        vel : nisarVel or nisarVelSeries
+            Velocity map for comparison.
+        minv : float
+            Minimum speed (inclusive).
+        maxv : float
+            Maximum speed (exclusive).
+        date : str or datetime, optional
+            Date for series data. The default is None.
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
+        Returns
+        -------
+        (muX, muY, sigX, sigY, rmsX, rmsY, nPts) or Pandas DataFrame
+            Raw stats tuple, or a styled DataFrame when table=True.
+        '''
         x, y = self.xyVRange(minv, maxv, units=units)
         iPts = self.vRangeCVs(minv, maxv)
         date1, date2 = self._processVelDate(date, vel)
@@ -453,7 +544,21 @@ class cvPoints:
 
     @_stats
     def noCullStats(self, vel, units='m', date=None):
-        ''' get stats for cvpoints in range (minv,maxv) '''
+        '''Compute mean, sigma and RMS differences for all non-culled CV points.
+        The @_stats decorator adds table=False, absError=1, percentError=0.03.
+        Parameters
+        ----------
+        vel : nisarVel or nisarVelSeries
+            Velocity map for comparison.
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
+        date : str or datetime, optional
+            Date for series data. The default is None.
+        Returns
+        -------
+        (muX, muY, sigX, sigY, rmsX, rmsY, nPts) or Pandas DataFrame
+            Raw stats tuple, or a styled DataFrame when table=True.
+        '''
         x, y = self.xyNoCull(units=units)
         if self.nocull is None:
             iPts = np.full(x.shape, True)
@@ -536,13 +641,16 @@ class cvPoints:
         Parameters
         ----------
         styler : pandas.io.formats.style.Styler
-            style for stats table.
+            Styler object for the stats DataFrame.
         thresh : float, optional
-            RMS values that exceed thresh are set to red. The default is 1.0.
+            RMS values that exceed this threshold are highlighted red.
+            The default is 1.0.
+        caption : str, optional
+            Caption text placed below the table. The default is None.
         Returns
         -------
-        styler : TYPE
-            DESCRIPTION.
+        pandas.io.formats.style.Styler
+            The styled DataFrame.
         '''
         if caption is not None:
             styler.set_caption(caption)
@@ -596,16 +704,18 @@ class cvPoints:
         Convert lat lon (deg) to x y (m)
         Parameters
         ----------
-        lat : nparray
-            Latitude nparray.
-        lon : nparray
-            Longitude nparray.
+        lat : np.ndarray
+            Latitude array (degrees).
+        lon : np.ndarray
+            Longitude array (degrees).
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
         Returns
         -------
-        x : nparray
-            x coordinate in m.
-        y : nparray
-            y coordinate in m..
+        x : np.ndarray
+            x coordinate.
+        y : np.ndarray
+            y coordinate.
         '''
         if not self._checkUnits(units):
             return None, None
@@ -634,11 +744,15 @@ class cvPoints:
 
     def xyZero(self, units='m'):
         '''
-        Return x and y (m) coordinates of zero CVs.
+        Return x, y coordinates of zero-speed CV points.
+        Parameters
+        ----------
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
         Returns
         -------
-        x,y  : nparray
-           x and y in m of zero CVs.
+        x, y : np.ndarray
+            Coordinates of zero-speed points.
         '''
         if not self._checkUnits(units):
             return None, None
@@ -650,11 +764,15 @@ class cvPoints:
 
     def xyAll(self, units='m'):
         '''
-        Return x and y (m) coordinates of all CVs.
+        Return x, y coordinates of all CV points.
+        Parameters
+        ----------
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
         Returns
         -------
-        x,y  : nparray
-           x and y in m of all CVs.
+        x, y : np.ndarray
+            Coordinates of all CV points.
         '''
         if not self._checkUnits(units):
             return None, None
@@ -665,11 +783,15 @@ class cvPoints:
 
     def xyNoCull(self, units='m'):
         '''
-        Return x and y (m) coordinates of all CVs.
+        Return x, y coordinates of non-culled CV points.
+        Parameters
+        ----------
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
         Returns
         -------
-        x,y  : nparray
-           x and y in m of all CVs.
+        x, y : np.ndarray
+            Coordinates of non-culled points.
         '''
         if not self._checkUnits(units):
             return None, None
@@ -683,11 +805,19 @@ class cvPoints:
 
     def xyVRange(self, minv, maxv, units='m'):
         '''
-        Return x and y (m) coordinates for pts with speed in range (minv,maxv).
+        Return x, y coordinates for points with speed in [minv, maxv).
+        Parameters
+        ----------
+        minv : float
+            Minimum speed (inclusive).
+        maxv : float
+            Maximum speed (exclusive).
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
         Returns
         -------
-        x,y  : nparray
-           x and y in m of all CVs.
+        x, y : np.ndarray
+            Coordinates of the selected points.
         '''
         if not self._checkUnits(units):
             return None, None
@@ -726,17 +856,23 @@ class cvPoints:
     @_plotCVLocs
     def plotVRangeCVLocs(self, minv, maxv, units='m', date=None, **kwargs):
         '''
-        plot x,y locations for points where maxv > v > min.
+        Plot x,y locations for points in speed range [minv, maxv).
         Parameters
         ----------
         minv : float
-            minimum speed of desired range.
+            Minimum speed (inclusive).
         maxv : float
-            maximum speed of desired range.
+            Maximum speed (exclusive).
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
+        date : str or datetime, optional
+            Used with vel= kwarg to filter by valid interpolation date.
+            The default is None.
+        **kwargs : dict
+            Additional kwargs passed to plt.plot.
         Returns
         -------
-        None
-            DESCRIPTION.
+        None.
         '''
         if not self._checkUnits(units):
             return None, None
@@ -745,14 +881,19 @@ class cvPoints:
     @_plotCVLocs
     def plotAllCVLocs(self, units='m', date=None, **kwargs):
         '''
-        plot x,y locations for points where maxv > v > min.
+        Plot x,y locations of all cal/val points.
         Parameters
         ----------
-        None.
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
+        date : datetime or str, optional
+            If provided with vel= kwarg, only plot points with valid
+            interpolated data at this date. The default is None.
+        **kwargs : dict
+            Additional kwargs passed to plt.plot (e.g., color, markersize).
         Returns
         -------
-        None
-            DESCRIPTION.
+        None.
         '''
         if not self._checkUnits(units):
             return None, None
@@ -764,15 +905,19 @@ class cvPoints:
         Parameters
         ----------
         minv : float
-            minimum speed of desired range.
+            Minimum speed (inclusive).
         maxv : float
-            maximum speed of desired range.
+            Maximum speed (exclusive).
         vel : nisarVel
-            A nisarVel object
+            Velocity map for computing residuals.
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
+        nSig : float, optional
+            Outlier threshold in sigma units. The default is 3.
         Returns
         -------
-        None
-            DESCRIPTION.
+        x, y : np.ndarray
+            Coordinates of outlier points.
         '''
         if not self._checkUnits(units):
             return None, None
@@ -793,20 +938,23 @@ class cvPoints:
 
     @_plotCVLocs
     def plotOutlierLocs(self, minv, maxv, vel, units='m', nSig=3):
-        ''' Plot outliers where difference in either velocity component is >
-        nSig*sigma for points in range (minv,maxv)
+        '''Plot locations of outlier points where the residual in either
+        velocity component exceeds nSig × sigma.
         Parameters
         ----------
         minv : float
-            minimum speed of desired range.
+            Minimum speed (inclusive).
         maxv : float
-            maximum speed of desired range.
+            Maximum speed (exclusive).
         vel : nisarVel
-            A nisarVel object
+            Velocity map for computing residuals.
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
+        nSig : float, optional
+            Outlier threshold in sigma units. The default is 3.
         Returns
         -------
-        None
-            DESCRIPTION.
+        None.
         '''
         return self.getOutlierLocs(minv, maxv, vel, units=units, nSig=nSig)
 
@@ -827,10 +975,10 @@ class cvPoints:
         colors : list
             List of colors.
         '''
-        colors = mcolors.TABLEAU_COLORS.values()
+        colors = list(mcolors.TABLEAU_COLORS.values())
         # Cycle colors if more are needed
         while len(colors) < nColors:
-            colors += mcolors.TABLEAU_COLORS.values()
+            colors += list(mcolors.TABLEAU_COLORS.values())
         return colors
 
 
@@ -1020,28 +1168,22 @@ class cvPoints:
     @_histDiffs
     def plotVRangeHistDiffs(self, vel, minv, maxv, date=None):
         '''
-        Plot differences between c/v points and interpolated values from
-        v in range (minv,maxv).
-        Originall written with decorator to accomodate multiple cases,
-        but collapsed it down to one. Kept decorator for future mods.
+        Plot histograms of differences between c/v points and values
+        interpolated from vel for points in speed range (minv, maxv).
         Parameters
         ----------
         vel : nisarVel
             Velocity map for comparison.
-        figD : matplot lib fig
-            Figure.
         minv : float
-            minimum speed of desired range.
+            Minimum speed of desired range.
         maxv : float
-            maximum speed of desired range.
+            Maximum speed of desired range.
+        date : str or datetime, optional
+            Date to interpolate from vel. The default is None (single-layer).
         Returns
         -------
-        x : nparray
-            x coordinates.
-        y : nparray
-            y coordinates.
-        iPts : bool array
-            points.
+        axes : list of matplotlib axes
+            [axHistX, axHistY] for the two histogram panels.
         '''
         x, y = self.xyVRange(minv, maxv)
         iPts = self.vRangeCVs(minv, maxv)
@@ -1055,16 +1197,24 @@ class cvPoints:
 
         Parameters
         ----------
-        myVelSeries : velSeries
+        myVelSeries : nisarVelSeries
             Velocity time series.
         minv : number
-            Only includ points >= minv.
+            Only include points with speed >= minv.
         maxv : number
-            Only include points <- maxv.
+            Only include points with speed < maxv.
+        absError : float, optional
+            Absolute velocity error floor for threshold computation (m/yr).
+            The default is 10.
+        percentError : float, optional
+            Fractional velocity error for threshold computation.
+            The default is 0.03 (3 %).
         Returns
         -------
         result : dict
-            {'vxGPS': [], ... 'vx': [],...'dvx': []...}.
+            Keys: 'vxGPS', 'vyGPS', 'vvGPS', 'vx', 'vy', 'vv',
+            'dvx', 'dvy', 'dvv', 'threshvx', 'threshvy'.
+            Each value is an ndarray with shape (nTimes, nPoints).
         '''
         dates = zip(myVelSeries.time, myVelSeries.time1, myVelSeries.time2)
         result = {'vxGPS': [], 'vyGPS': [], 'vvGPS': [], 'vx': [],
@@ -1098,20 +1248,24 @@ class cvPoints:
         point locations and return the differences (vx_map - vx_cv).
         Parameters
         ----------
-        x : nparray
-            x coordinates.
-        y : nparray
-            y coordinates.
+        x : np.ndarray
+            x coordinates of the CV points.
+        y : np.ndarray
+            y coordinates of the CV points.
         iPts : bool array
-            points to compare.
-        vel : nisarVel
+            Boolean mask selecting which CV points to compare.
+        vel : nisarVel or nisarVelSeries
             Velocity map for comparison.
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
+        date : str or datetime, optional
+            Date for series data. The default is None.
         Returns
         -------
-        dvx nparray
-            vx difference for good points.
-        dvy nparray
-            vy difference for good points.
+        dvx : np.ndarray
+            vx difference (map − GPS) for each point.
+        dvy : np.ndarray
+            vy difference (map − GPS) for each point.
         '''
         vx, vy, vv = vel.interp(x, y, units=units, date=date)[0:3]
         # subtract cvpoint values args[0] is self
@@ -1167,21 +1321,21 @@ class cvPoints:
         self.applyCull(toCull)
 
     def setNoCull(self, noCull):
-        ''' Pass in list of points not to cull
-         Parameters
+        '''Directly set the keep/cull mask.
+        Parameters
         ----------
-        cullFile : list of points to not cull (true means keep)
+        noCull : bool array
+            Boolean array aligned with the CV points; True = keep, False = cull.
         '''
         self.nocull = noCull
 
     def applyCull(self, toCull):
         '''
-        Read a cv point cull file and update nocull so that these points
-        can be filtered out if needed.
+        Mark a set of points for culling by setting self.nocull to False.
         Parameters
         ----------
-        cullFile : str
-            File name for cull file.The file contains a
+        toCull : array-like of int
+            Indices of points to cull (mark as False in self.nocull).
         Returns
         -------
         None
@@ -1192,11 +1346,22 @@ class cvPoints:
 
     def boundingBox(self, units='m', x=None, y=None, pad=10000.):
         '''
-        Compute Bounding box for tiepoints
+        Compute bounding box for CV points.
+        Parameters
+        ----------
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
+        x : np.ndarray, optional
+            x coordinates to use. The default is None (uses all points).
+        y : np.ndarray, optional
+            y coordinates to use. The default is None (uses all points).
+        pad : float, optional
+            Padding to add on each side (in the same units as x, y before
+            conversion). The default is 10000 m.
         Returns
         -------
-        bounding box {'minx': minxm, 'miny': miny, 'maxx': maxx, 'maxy' : maxy}
-
+        dict
+            {'minx': ..., 'miny': ..., 'maxx': ..., 'maxy': ...}.
         '''
         if x is None or y is None:
             x, y = self.xyAll(units=units)

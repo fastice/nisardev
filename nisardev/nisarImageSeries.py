@@ -36,11 +36,18 @@ class nisarImageSeries(nisarBase2D):
         ----------
         verbose : bool, optional
             Increase level of informational messages. The default is True.
+        imageType : str, optional
+            Type of image data: 'image' (DN), 'sigma0' (dB), or 'gamma0' (dB).
+            The default is None (must be set before reading data).
+        numWorkers : int, optional
+            Number of dask workers for parallel I/O. The default is 2.
+        **kwds : dict
+            Additional keyword arguments passed to nisarBase2D.__init__.
         Returns
         -------
         None.
         '''
-        super().__init__(self, numWorkers=numWorkers, **kwds)
+        super().__init__(numWorkers=numWorkers, **kwds)
         self.image, self.sigma0, self.gamma0 = [None] * 3
         #
         self.myVariables(imageType)
@@ -56,12 +63,12 @@ class nisarImageSeries(nisarBase2D):
         Unlike velocity, images are single band.
         Parameters
         ----------
-        imageType str:
-            imageType either 'image', 'sigma0', or 'gamma0'
+        imageType : str
+            Image type: 'image', 'sigma0', or 'gamma0'.
         Returns
         -------
-        myVars : list of str
-            list with variable name, e.g. ['gamma0'].
+        list of str
+            List containing the single variable name, e.g. ['gamma0'].
         '''
         if imageType is None:
             return
@@ -87,14 +94,22 @@ class nisarImageSeries(nisarBase2D):
 
         Parameters
         ----------
-        x : nparray
-            DESCRIPTION.
-        y : nparray
-            DESCRIPTION.
+        x : np.ndarray
+            x coordinates (polar stereographic).
+        y : np.ndarray
+            y coordinates (polar stereographic).
+        date : str or datetime, optional
+            Interpolate layer nearest to this date. None returns all layers.
+            The default is None.
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
+        returnXR : bool, optional
+            Return an xarray DataArray instead of a numpy array.
+            The default is False.
         Returns
         -------
-        npArray
-            interpolate results for [nbands, npts].
+        np.ndarray or xarray.DataArray
+            Interpolated values with shape [nbands, npts].
         '''
         if not self._checkUnits(units):
             return
@@ -107,11 +122,14 @@ class nisarImageSeries(nisarBase2D):
 
         Parameters
         ----------
-        date : datetime, or str "YYYY-MM-DD"
-            date closest to desired layer
+        date : datetime or str 'YYYY-MM-DD'
+            Date closest to the desired layer.
+        returnXR : bool, optional
+            If True, return an xarray DataArray instead of numpy arrays.
+            The default is False.
         Returns
         -------
-        vx, vy
+        list of np.ndarray + datetime, or xarray.DataArray
         '''
         date = self.parseDate(date)  # Convert str to datetime if needed
         result = self.subset.sel(time=date, method='nearest')
@@ -141,31 +159,31 @@ class nisarImageSeries(nisarBase2D):
             [pattern.*.abc ...] or [pattern*....]
             The wildcard (*) will be filled with the values in myVars
             e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
-        bbox dict, optional
-            bbox to clip the product to {'minx': ...}
+        bbox : dict, optional
+            Bounding box to clip on load: {'minx': ..., 'miny': ...,
+            'maxx': ..., 'maxy': ...}. The default is None (full extent).
         url : bool, optional
-            Read data from url
-        useStack : Boolean, optional
-            Repeat headers for quicker open. The default is True.
-            The default is True.
-        index1, index2 : location of dates in filename with seperated by _
-        dateFormat : format code to strptime
-        overviewLevel: int
-            Overview (pyramid) level to read: None->full res, 0->1/2 res,
-            1->1/4 res....to image dependent max downsampling level
-            The default is -1.
+            Set True if filenames are URLs. The default is False.
+        useStack : bool, optional
+            Use cached template for faster repeated opens. The default is False.
+        index1 : int, optional
+            0-based position of the first date token in the '_'-split filename.
+            The default is 3.
+        index2 : int, optional
+            0-based position of the second date token. The default is 4.
+        dateFormat : str, optional
+            strptime format for date tokens. The default is '%d%b%y'.
+        overviewLevel : int, optional
+            Overview (pyramid) level to read: -1 → full resolution,
+            0 → 1/2 res, 1 → 1/4 res, etc. The default is -1.
         suffix : str, optional
-            Any suffix that needs to be appended (e.g., for dropbox links)
+            Suffix appended to the URL/filename (e.g. for Dropbox links).
+            The default is ''.
         chunkSize : int, optional
-            Chunksize for xarray. Default is 2048.
-        dates1 : list, optional
-            List of first dates corresponding to filenames. Default is to parse
-            dates from filenames.
-        dates2 : list, optional
-            List of first dates corresponding to filenames. Default is to parse
-            dates from filenames.
-        subsetMode: bool, optional
-            If true, save the result as a subset instead of xr
+            Chunk size for dask-backed xarray. The default is 2048.
+        subsetMode : bool, optional
+            If True, store the result as a subset instead of the full xr.
+            The default is False.
         Returns
         -------
         None.
@@ -370,31 +388,34 @@ class nisarImageSeries(nisarBase2D):
         fontScale : float, optional
             Scale factor to apply to label, title, and plot fontsizes (e.g.,
             1.2 would increase by 20%). The default is 1.
-        axisOff : TYPE, optional
+        cmap : str or colormap, optional
+            Colormap. The default is 'gray'.
+        axisOff : bool, optional
             Turn axes off. The default is False.
-        midDate : Boolean, optional
-            Use middle date for titel. The default is True.
+        midDate : bool, optional
+            Use middle date for title. The default is True.
+        colorBar : bool, optional
+            Show a colour bar. The default is True.
         colorBarLabel : str, optional
-            Label for colorbar. The default is 'Speed (m/yr)'.
-        colorBarPosition : TYPE, optional
-            Color bar position (e.g., left, top...). The default is 'right'.
+            Label for colorbar. The default is band-appropriate
+            ('DN', '$\\sigma_o$ (dB)', or '$\\gamma_o$ (dB)').
+        colorBarPosition : str, optional
+            Color bar position (e.g., 'left', 'top'). The default is 'right'.
         colorBarSize : str, optional
-            Color bar size specfied as 'n%'. The default is '5%'.
+            Color bar size specified as 'n%'. The default is '5%'.
         colorBarPad : float, optional
-            Color bar pad. The default is 0.05.
+            Color bar padding. The default is 0.05.
         wrap : float, optional
             Display data modulo wrap. The default is None.
         extend : str, optional
-            Colorbar extend ('both','min', 'max', 'neither').
+            Colorbar extend ('both', 'min', 'max', 'neither').
             The default is None.
         backgroundColor : color, optional
             Background color. The default is (1, 1, 1).
-        wrap :  number, optional
-             Display velocity modululo wrap value
         masked : Boolean, optional
-            Masked for imshow. The default is None.
+            Mask array for imshow. The default is None.
         **kwargs : dict
-            kwargs passed to imshow.
+            Kwargs passed to imshow.
         Returns
         -------
         None.
@@ -488,17 +509,21 @@ class nisarImageSeries(nisarBase2D):
         *argv : list
             Additional args to pass to plt.plot (e.g. 'r*').
         band : str, optional
-            band name (image, sigma0, gamma0). The default is 1st band loaded.
+            Band name (image, sigma0, gamma0). The default is the 1st loaded band.
         ax : axis, optional
-            matplotlib axes. The default is None.
-        date : 'YYYY-MM-DD' or datetime, optional
-            The date in the series to plot. The default is the first date.
-        ax : axis, optional
+            Matplotlib axes. The default is None.
+        date : str or datetime, optional
+            Layer to profile. The default is the first time step.
+        midDate : bool, optional
+            Use the mid-date (True) or date range (False) for the plot title.
+            The default is True.
         distance : nparray, optional
-            distance variable for plot.
-            The default is None, which causes it to be calculated.
+            Pre-computed distance array for the x-axis.
+            The default is None (calculated from x, y).
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
         **kwargs : dict
-            kwargs pass through to plt.plot.
+            Kwargs passed through to plt.plot.
 
         Returns
         -------
@@ -525,14 +550,14 @@ class nisarImageSeries(nisarBase2D):
                          fontScale=1,
                          axisOff=False):
         '''
-        Label a profile plot
+        Label a profile plot.
 
         Parameters
         ----------
         ax : axis
             matplotlib axes. The default is None.
         band : str, optional
-            band name (vx, vy, vv). The default is 'vv'.
+            Band name (image, sigma0, gamma0). The default is 1st band loaded.
         xLabel : tr, optional
             x-axis label. The default is 'Distance', use '' to disable.
         yLabel : tr, optional
@@ -587,19 +612,19 @@ class nisarImageSeries(nisarBase2D):
                        fontScale=1,
                        axisOff=False):
         '''
-        Label a profile plot
+        Label a point-vs-time plot.
 
         Parameters
         ----------
         ax : axis
             matplotlib axes. The default is None.
         band : str, optional
-            band name (vx, vy, vv). The default is 'vv'.
-        xLabel : tr, optional
-            x-axis label. The default is 'Distance', use '' to disable.
-        yLabel : tr, optional
-            x-axis label. The default is band appropriate (e.g, Speed),
-            use '' to disable.
+            Band name (image, sigma0, gamma0). The default is 1st band loaded.
+        xLabel : str, optional
+            x-axis label. The default is 'Date', use '' to disable.
+        yLabel : str, optional
+            y-axis label. The default is band appropriate (e.g., DN value,
+            gamma0 dB), use '' to disable.
         units : str, optional
             Units (m or km) for the x, y coordinates. The default is 'm'
         title : str, optional

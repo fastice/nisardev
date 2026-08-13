@@ -17,7 +17,7 @@ import os
 import matplotlib.pylab as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib import colors
-from datetime import datetime
+from datetime import datetime, timedelta
 import holoviews as hv
 import panel as pn
 from affine import Affine
@@ -43,7 +43,28 @@ class nisarBase2D():
 
     def __init__(self,  sx=None, sy=None, x0=None, y0=None, dx=None, dy=None,
                  verbose=True, epsg=None, numWorkers=2, template=None):
-        ''' initialize a nisar velocity object'''
+        '''
+        Initialize a nisarBase2D abstract base object for 2D polar-stereographic
+        geospatial data (e.g. velocity maps, SAR images).
+
+        Parameters
+        ----------
+        sx, sy : int, optional
+            Image size in pixels (x, y).
+        x0, y0 : float, optional
+            Origin of the lower-left pixel centre in metres.
+        dx, dy : float, optional
+            Pixel size in metres.
+        verbose : bool, optional
+            Print progress messages. The default is True.
+        epsg : int, optional
+            EPSG projection code (3031 = Antarctic PS, 3413 = Greenland PS).
+        numWorkers : int, optional
+            Number of dask workers. The default is 2.
+        template : dict, optional
+            Cached rasterio metadata template for lazy reads. The default is
+            None (created on first read).
+        '''
         self.sx, self.sy = sx, sy  # Image size in pixels
         self.x0, self.y0 = x0, y0  # Origin (center of lower left pixel) in m
         self.dx, self.dy = dx, dy  # Pixel size
@@ -147,8 +168,13 @@ class nisarBase2D():
             Chunk size for reading data
         '''
         # Do a lazy open on the tiffs
-        # For now useStack turned off since it tries to read the full res
-        # data and donwsample instead of the pyramid
+        # useStack=True: template-based path (_lazyOpenProduct) — reads the
+        # header once and reuses it for all bands; each band is one single
+        # dask-delayed I/O call covering the entire window.  Preferred for
+        # most workflows, especially with loadRemote().
+        # useStack=False: rioxarray path (_lazy_openTiff) — opens each band
+        # independently with rioxarray/dask tiles; useful when only a few
+        # scattered points are needed from a large extent without loadRemote().
         if useStack:
             myXR = self._lazyOpenProduct(fileNameBase,
                                          bbox=bbox,
@@ -177,16 +203,18 @@ class nisarBase2D():
         Parameters
         ----------
         XR : xarray
-            xarray with desired variables
+            xarray with desired variables.
         time : datetime, optional
-            nominal center. The default is None.
-        time1 : TYPE, optional
+            Nominal centre date. The default is None.
+        time1 : datetime, optional
             Nominal start time. The default is None.
-        time2 : TYPE, optional
-            Nominal endtie. The default is None.
-        xrName: str, optional
-            Name for xr array. The default is 'None'
-
+        time2 : datetime, optional
+            Nominal end time. The default is None.
+        xrName : str, optional
+            Name for xr array. The default is 'None'.
+        useStack : bool, optional
+            Whether the data was opened with the stack (template) method.
+            The default is True.
         Returns
         -------
         None
@@ -217,23 +245,18 @@ class nisarBase2D():
         Copy (deep) of itself
         '''
         # Make an empty instance
-        print(1)
         new = self.reproduce()
         # Deep copy the xr
         newXR = self.xr.copy(deep=True)
-        print(2)
         new.initXR(newXR)
-        # Get the bouding box and subset
+        # Get the bounding box and subset
         bbox = self._xrBoundingBox(self.subset)
         new.template = copy.deepcopy(self.template)
         new.nLayers = self.nLayers
         new.fileNames = copy.deepcopy(self.fileNames)
         new.inputParamsSeries = copy.deepcopy(self.inputParamsSeries)
-        print(bbox)
-        print(3)
         new.subsetData(bbox)
         # If the data have already been loaded, force a reload.
-        print(4)
         if self.subset.chunks is None and self.template is None:
             new.subset.load()
             new._mapVariables()  # Forces remapping to non dask
@@ -550,11 +573,10 @@ class nisarBase2D():
 
         def _read_window(path, window, overviewLevel=-1, masked=True):
             with rasterio.open(path, overview_level=overviewLevel) as src:
-                data = src.read(window=window, masked=masked)
-                if self.template['dtype'] == 'uint8':
-                    data = data.filled(0)
-                else:
-                    data = data.filled(np.nan)
+                fill = 0 if self.template['dtype'] == 'uint8' else np.nan
+                data = src.read(window=window, masked=masked,
+                                boundless=True, fill_value=fill)
+                data = data.filled(fill)
             return data
         #
         lazy_arr = dask.array.from_delayed(
@@ -587,11 +609,10 @@ class nisarBase2D():
                        xrName='None', skip=[], overviewLevel=None, suffix='',
                        chunkSize=2048):
         '''
-        Lazy open of a single velocity product
-        Parameters
-        ----------
-        fileNameBase, str
-            template with filename firstpart_*_secondpart (no .tif)
+        Lazy open of a single product, reading each band individually via
+        rioxarray. Prefer ``_lazyOpenProduct`` (the template-based path) for
+        better performance; this method is the fallback when templates are
+        disabled.
 
         Parameters
         ----------
@@ -678,7 +699,7 @@ class nisarBase2D():
         newSubset.initXR(newXR)
         # Get current bounding box and subset
         bbox = self._xrBoundingBox(self.subset)
-        newSubset.subSetData(bbox)
+        newSubset.subsetData(bbox)
         #
         # If existing subset has been loaded, load the new subset
         if self.subset.chunks is None:
@@ -742,13 +763,16 @@ class nisarBase2D():
 
     def computePixEdgeCornersXYM(self, units='m'):
         '''
-        Return dictionary with corner locations. Note unlike pixel
-        centered xx, x0 etc values, these corners are defined as the outer
-        edges as in a geotiff
+        Return dictionary with pixel-edge corner locations (not pixel centres).
+        Parameters
+        ----------
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
         Returns
         -------
         corners : dict
-            corners in xy coordinates: {'ll': {'x': xll, 'y': yll}...}.
+            Corner coordinates: {'ll': {'x': xll, 'y': yll}, 'lr': ...,
+            'ur': ..., 'ul': ...}.
         '''
         # Make sure geometry defined
         params = ['sx', 'sy', 'x0', 'y0', 'dx', 'dy']
@@ -756,7 +780,7 @@ class nisarBase2D():
             myError(f'Geometry param not defined size {self.nx,self.ny}, '
                     'origin {self.x0,self.y0}), or pix size {self.dx,self.dy}')
         # compute pixel corners from pixel centers
-        self.checkUnits(units)
+        self._checkUnits(units)
         #
         xll, yll = self.x0 - self.dx/2, self.y0 - self.dx/2
         xur, yur = xll + self.sx * self.dx, yll + self.sy * self.dy
@@ -840,17 +864,23 @@ class nisarBase2D():
             y coordinates in m to interpolate to.
         myVars : list of str
             list of variable names as strings, e.g. ['vx',...].
+        date : str or datetime, optional
+            Interpolate layer nearest to this date. None returns all times.
+            The default is None.
+        returnXR : bool, optional
+            Return an xarray DataArray instead of a numpy array.
+            The default is False.
         grid : boolean, optional
-            If false, interpolate at x, y values. If true create grid with
-            x and y 1-d arrays for each dimension. The default is False.
+            If False, interpolate at x, y point pairs. If True, create a
+            grid from 1-D x and y arrays. The default is False.
         units : str ('m' or 'km'), optional
-            Units. The default is 'm'.
-        **kwargs : TBD
-            keywords passed through to interpolator.
+            Units of x, y coordinates. The default is 'm'.
+        **kwargs : dict
+            Keywords passed through to the interpolator.
         Returns
         -------
-        np float array
-            Interpolated valutes from x,y locations.
+        np.ndarray or xarray.DataArray
+            Interpolated values, shape [nbands, npts] (or grid equivalent).
         '''
         if not self._checkUnits(units):
             return
@@ -1038,7 +1068,15 @@ class nisarBase2D():
 
     @_applyInTime
     def anomaly(self):
-        #
+        '''
+        Compute temporal anomaly (each time step minus the temporal mean) and
+        return a new instance of the same class.
+
+        Returns
+        -------
+        same class as caller
+            Object with anomaly fields; time dimension preserved.
+        '''
         myMean = self.subset.mean(dim='time')
         myAnomalyXR = xarray.concat(
             [self.subset.sel(time=t) - myMean for t in self.subset.time],
@@ -1063,12 +1101,15 @@ class nisarBase2D():
         Parameters
         ----------
         skipna : bool, optional
-            Skips nans in computation. The default is True.
-
+            Skip NaN values in the computation. The default is True.
+        errors : list of str, optional
+            Band names that represent errors (e.g., ['ex', 'ey', 'ev']).
+            These bands are averaged in quadrature (sqrt(mean(sigma^2)/N))
+            rather than arithmetically. The default is [] (no error bands).
         Returns
         -------
         same as class method called from
-            Object with mean and time axis reduced to dimension of 1.
+            Object with temporal mean; time axis reduced to dimension 1.
 
         '''
         #
@@ -1116,20 +1157,15 @@ class nisarBase2D():
     @_applyInTime
     def numberValid(self):
         '''
-        Compute count of valid data along time axis and return new instance of
-        same class.
-        Note that the original xr and subset correspond to the subset
-        of the calling instance.
-        Parameters
-        ----------
-        skipna : bool, optional
-            Skips nans in computation. The default is True.
+        Compute count of valid (non-NaN) data along the time axis and return
+        a new instance of the same class.
+        Note that the original xr and subset correspond to the subset of the
+        calling instance.
 
         Returns
         -------
         same as class method called from
-            Object valid-data count with time axis reduced to dimension of 1.
-        return
+            Object with valid-data counts; time axis reduced to dimension 1.
         '''
         return self.subset.notnull().sum(dim='time')
 
@@ -1138,13 +1174,22 @@ class nisarBase2D():
     #
 
     def parseDate(self, date, defaultDate=True, returnString=False):
-        ''' Accept date as either datetime or YYYY-MM-DD
+        '''Accept date as either a datetime or a 'YYYY-MM-DD' string and
+        return a datetime.
         Parameters
         ----------
-        date, str or datetime
+        date : str or datetime or None
+            Date to parse.  Pass None to use the first time in the dataset
+            (when defaultDate=True) or to return None (when defaultDate=False).
+        defaultDate : bool, optional
+            If True and date is None, return the first time in the dataset.
+            The default is True.
+        returnString : bool, optional
+            If True, return the date as a 'YYYY-MM-DD' string instead of a
+            datetime.  The default is False.
         Returns
         -------
-        date as datetime instance
+        datetime (or str if returnString=True)
         '''
         if date is None:
             if defaultDate:
@@ -1152,6 +1197,9 @@ class nisarBase2D():
                     np.datetime64(self.subset.time.item(0), 'ns'))
             else:
                 return None
+        if isinstance(date, (int, np.integer)):
+            date = datetime(2000, 1, 1) + timedelta(days=int(date))
+            return date
         try:
             if type(date) is str:
                 date = datetime.strptime(date, '%Y-%m-%d')
@@ -1211,17 +1259,25 @@ class nisarBase2D():
 
     def colorSetup(self, scale, cmap, vmin, vmax, backgroundColor=(1, 1, 1)):
         '''
-        Set up normalization and color table for imshow
+        Set up normalization and colormap for imshow.
         Parameters
         ----------
         scale : str
-            scale
-        cmap : color map
-            color map.
+            Scale type: 'linear' or 'log'.
+        cmap : str or matplotlib colormap
+            Colormap name or object.
+        vmin : float
+            Minimum display value.
+        vmax : float
+            Maximum display value.
+        backgroundColor : color, optional
+            Color used for masked (bad) pixels. The default is (1, 1, 1).
         Returns
         -------
-        norm, normalization
-        cmap, color ma
+        norm : matplotlib.colors.Normalize or LogNorm
+            Normalization instance.
+        cmap : matplotlib colormap
+            Configured colormap with bad-pixel colour set.
         '''
         if scale == 'log':
             norm = colors.LogNorm(vmin=vmin, vmax=vmax)
@@ -1244,18 +1300,23 @@ class nisarBase2D():
         vmax bounds.
         Parameters
         ----------
-        myVar : nparray
-            Data being displayed.
+        band : str
+            Band name to auto-scale (e.g., 'vv', 'image').
+        date : str or datetime or None
+            Use the layer nearest to this date. None uses all layers.
         vmin : float
-            Absolute minimum value.
-        vmax : TYPE
-            absolute maximum value.
-        percentile : TYPE
-            Clip data at (100-percentile) and percentile.
-
+            Absolute minimum allowed value (floor).
+        vmax : float
+            Absolute maximum allowed value (ceiling).
+        percentile : float
+            Clip to the (100-percentile) and percentile quantiles.
+        quantize : float, optional
+            Round the resulting vmin/vmax to the nearest multiple of this
+            value. The default is 100.
         Returns
         -------
-        vmin, vmap - updated values based on percentiles.
+        vmin, vmax : float
+            Updated display range clipped to percentiles.
         '''
         # select band by date
         date = self.parseDate(date)
@@ -1305,7 +1366,7 @@ class nisarBase2D():
         if colorBarPosition in ['right', 'left']:
             cbAx.yaxis.set_ticks_position(colorBarPosition)
             cbAx.yaxis.set_label_position(colorBarPosition)
-        elif colorBarPosition in ['top', 'tottom']:
+        elif colorBarPosition in ['top', 'bottom']:
             cbAx.xaxis.set_ticks_position(colorBarPosition)
             cbAx.xaxis.set_label_position(colorBarPosition)
 
@@ -1340,7 +1401,19 @@ class nisarBase2D():
         return colors.hsv_to_rgb(hsv)
 
     def logHSVColorMap(self, vmin=1, vmax=3000, ncolors=1024):
-        ''' Create a log color map for displaying velocity'''
+        '''Create a log-scaled HSV colour map for displaying velocity.
+        Parameters
+        ----------
+        vmin : float, optional
+            Minimum velocity for the colour scale. The default is 1.
+        vmax : float, optional
+            Maximum velocity for the colour scale. The default is 3000.
+        ncolors : int, optional
+            Number of discrete colours in the map. The default is 1024.
+        Returns
+        -------
+        matplotlib.colors.LinearSegmentedColormap
+        '''
         # value
         value = np.full((ncolors), 1)
         # Compute values of log scale
@@ -1452,15 +1525,15 @@ class nisarBase2D():
         Parameters
         ----------
         band : str
-            band name (e.g., sigma, vx, vy).
-        date : 'YYYY-MM-DD' or datetime, optional
-            The date in the series to plot. The default is the first date.
-        title : TYPE, optional
-            DESCRIPTION. The default is None.
+            Band name to display (e.g., 'vv', 'sigma0', 'image').
+        date : str or datetime, optional
+            Plot the layer nearest to this date. The default is the first date.
+        title : str, optional
+            Plot title. None defaults to the layer date; '' disables the title.
         ax : axis, optional
-            matplotlib axes. The default is None.
-        colorBar : TYPE, optional
-            DESCRIPTION. The default is True.
+            Matplotlib axes. The default is None (creates a new figure).
+        colorBar : bool, optional
+            Show a colour bar. The default is True.
         labelFontSize : int, optional
             Font size for x&y labels. The default is 15.
         titleFontSize : int, optional
@@ -1586,7 +1659,15 @@ class nisarBase2D():
         return x/1000., y/1000.
 
     def size(self, units='m'):
-        ''' Return size in meters '''
+        '''Return the spatial size of the data domain.
+        Parameters
+        ----------
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
+        Returns
+        -------
+        (width, height) : tuple of float
+        '''
         self._checkUnits(units)
         if units == 'km':
             return self._toKM(self.sx*self.dx, self.sy*self.dy)
@@ -1614,7 +1695,15 @@ class nisarBase2D():
         return xbox, ybox
 
     def origin(self, units='m'):
-        ''' Return origin in meters (default) or km '''
+        '''Return the lower-left pixel-centre coordinate.
+        Parameters
+        ----------
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
+        Returns
+        -------
+        (x0, y0) : tuple of float
+        '''
         self._checkUnits(units)
         if units == 'km':
             return self._toKM(self.x0, self.y0)
@@ -1622,7 +1711,11 @@ class nisarBase2D():
 
     def bounds(self, units='m'):
         '''
-        Determine data bounds in meters (default) or km
+        Return data extent as (xmin, ymin, xmax, ymax).
+        Parameters
+        ----------
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
         Returns
         -------
         xmin : float
@@ -1645,17 +1738,15 @@ class nisarBase2D():
 
     def extent(self, units='m'):
         '''
-        Determine extent [xmin, xmax, ymin, ymax]
+        Return extent as [xmin, xmax, ymin, ymax] suitable for
+        matplotlib imshow's ``extent=`` argument.
+        Parameters
+        ----------
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
         Returns
         -------
-        xmin : float
-            min x (lower left) coordinate.
-        xmax : float
-            max x (upper right) coordinate.
-        ymin : float
-            min y (lower left) coordinate.
-        ymax : float
-            max y (upper right) coordinate.
+        xmin, xmax, ymin, ymax : float
         '''
         self._checkUnits(units)
         bounds = self.bounds(units=units)
@@ -1672,12 +1763,11 @@ class nisarBase2D():
 
     def boundingBox(self, units='m'):
         '''
-        Return a bounding box used to crop
+        Return a bounding box dict suitable for passing to subsetData.
         Parameters
         ----------
-        unit : TYPE, optional
-            DESCRIPTION. The default is 'm'.
-
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
         Returns
         -------
         dict
@@ -1688,13 +1778,17 @@ class nisarBase2D():
 
     def pixSize(self, units='m'):
         '''
-        Return pixel size in m
+        Return pixel size.
+        Parameters
+        ----------
+        units : str, optional
+            Output units ('m' or 'km'). The default is 'm'.
         Returns
         -------
         dx : float
-            pixel size in x dimension.
+            Pixel size in x dimension.
         dy : float
-            pixel size in y dimension.
+            Pixel size in y dimension.
         '''
         self._checkUnits(units)
         if units == 'km':
@@ -1713,14 +1807,21 @@ class nisarBase2D():
         Write individual bands with
         Parameters
         ----------
-        tiffFile : str
-            Root name of tiff files
-                myFile.*.X.tif or  myFile.*.X  -> myFile.myVar.X.tif
-                myFile or myFile.tif -> myFile.myVar.tif
-        myVar : str or [str,...], optional
-            Name of a single or multiple variables to save  (e.g., ".vx").
-        kwargs : optional
-            pass through keywords to rio.to_raster
+        tiffRoot : str
+            Root name for output tiff files.  If '*' is present it is replaced
+            with the band name; otherwise the band name is appended.
+            e.g. 'myFile.*.tif' → 'myFile.vx.tif', 'myFile.vy.tif', ...
+        full : bool, optional
+            Write the full xr (ignoring any subset) when True. The default is
+            False (writes the current subset).
+        myVars : str or list of str, optional
+            Single band name or list of band names to write. The default is
+            None (write all loaded bands).
+        myXR : xarray.DataArray, optional
+            Explicit xarray to write instead of self.subset. The default is
+            None.
+        **kwargs : dict
+            Additional keyword arguments passed through to rio.to_raster.
         Returns
         -------
         None.
@@ -1756,7 +1857,12 @@ class nisarBase2D():
         baseName : str
             First part of file name.
         dateFormat : str, optional
-            Format for date strings in name. The default is '%b%d%Y'.
+            strftime format for the date tokens in the output filename.
+            The default is '%d%b%y'.
+        suffix : str, optional
+            Trailing label appended before the band name in the filename
+            (e.g., 'V' → 'baseName_date1_date2_*_V.tif').
+            The default is 'V'.
         Returns
         -------
         None.
@@ -1799,16 +1905,19 @@ class nisarBase2D():
         return cdfFile
 
     def tiffFileName(self, tiffRoot, myVar):
-        ''' Create tiff Name from root and var type
-        if "*" in name, replace with myVar, otherwise append ".myVar"
-        append ".tif" if not already present
-        Write a cloud optimized geotiff with overviews if requested.
+        '''Create a tiff filename from a root template and a variable name.
+        If '*' appears in tiffRoot it is replaced with myVar; otherwise myVar
+        is appended with a '.'.  A '.tif' extension is added if absent.
         Parameters
         ----------
-        tiffFile : str
-            Root name for output tiff file.
+        tiffRoot : str
+            Root name (template) for the output tiff file.
         myVar : str
-            Name of variable being written
+            Band / variable name to insert (e.g., 'vx').
+        Returns
+        -------
+        str
+            Full tiff filename.
         '''
         tiffRoot = tiffRoot.replace('.tif', '')
         if '*' in tiffRoot:

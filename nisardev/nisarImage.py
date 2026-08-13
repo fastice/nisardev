@@ -32,13 +32,22 @@ class nisarImage(nisarBase2D):
         'gamma0', or user defined.
         Parameters
         ----------
-        imageType: str
-            imageType custom name, or image, sigma0, gamma0. If not specified
-            determined from grimp product name.
+        imageType : str or None, optional
+            Image band type: 'image' (DN, uint8), 'sigma0' (dB, float32),
+            or 'gamma0' (dB, float32). If None, the type is detected from
+            the filename when reading. The default is None.
         verbose : bool, optional
             Increase level of informational messages. The default is True.
-        noData : scalar
-            no data value. Defaults to np.nan if not image/sigma/gamma
+        noData : scalar, optional
+            No-data fill value. Defaults to 0 for 'image', -30 for
+            sigma0/gamma0, and np.nan for any other type.
+        dtype : str or numpy dtype, optional
+            Override data type (e.g., 'float32'). The default is None
+            (type chosen automatically from imageType).
+        numWorkers : int, optional
+            Number of dask workers for parallel I/O. The default is 2.
+        **kwds : dict
+            Additional keyword arguments passed to nisarBase2D.__init__.
         Returns
         -------
         None.
@@ -75,12 +84,12 @@ class nisarImage(nisarBase2D):
         Unlike velocity, images are single band.
         Parameters
         ----------
-        imageType str:
-            imageType either 'image', 'sigma0', or 'gamma0'
+        imageType : str
+            Image type: 'image', 'sigma0', or 'gamma0'.
         Returns
         -------
-        myVars : list of str
-            list with variable name, e.g. ['gamma0'].
+        list of str
+            List containing the single variable name, e.g. ['gamma0'].
         '''
         if imageType is None:
             return
@@ -157,25 +166,31 @@ class nisarImage(nisarBase2D):
         Parameters
         ----------
         fileNameBase : str
-            FileNameBase should be of the form
-        bbox dict, optional
-           bbox to clip the product to {'minx': ...}
+            Filename without the .tif extension, e.g. 'GL_image_01Jul20_31Jul20'.
+            If '*' is present it is replaced with the band name.
+        bbox : dict, optional
+            Bounding box to clip on load: {'minx': ..., 'miny': ...,
+            'maxx': ..., 'maxy': ...}. The default is None (full extent).
         url : bool, optional
-            Read data from url
-        useStack : Boolean, optional
-            Repeat headers for quicker open. The default is True.
-            The default is True.
+            Set True if fileNameBase is a URL. The default is False.
+        useStack : bool, optional
+            Use cached template for faster repeated opens. The default is True.
         dateFormat : str, optional
-            Format code to strptime from file name. Default is %d%b%y',
-        index1, index2 : location of dates in filename with seperated by _
-            dateFormat : format code to strptime
-        overviewLevel: int
-            Overview (pyramid) level to read: None->full res, 0->1/2 res,
-            1->1/4 res....to image dependent max downsampling level
+            strptime format for date tokens in the filename.
+            The default is '%d%b%y'.
+        index1 : int, optional
+            0-based position of the first date token when the filename is
+            split by '_'. The default is 3.
+        index2 : int, optional
+            0-based position of the second date token. The default is 4.
+        overviewLevel : int, optional
+            Overview (pyramid) level to read: -1 → full resolution,
+            0 → 1/2 res, 1 → 1/4 res, etc. The default is -1.
         suffix : str, optional
-            Any suffix that needs to be appended (e.g., for dropbox links)
+            Suffix appended to the URL/filename (e.g. for Dropbox links).
+            The default is ''.
         chunkSize : int, optional
-            Chunksize for xarray. Default is 4096.
+            Chunk size for dask-backed xarray. The default is 2048.
         date1 : "YYYY-MM-DD" or datetime
             First date. Default is None, which parses date from filename.
         date2 : "YYYY-MM-DD" or datetime
@@ -195,8 +210,7 @@ class nisarImage(nisarBase2D):
         self.variables = self.myVariables(self.imageType)
         #
         self.inputParams = locals()
-        for x in ['self', 'fileNameBase', 'useDT',
-                  'readSpeed', 'useVelocity', 'useErrors',
+        for x in ['self', 'fileNameBase',
                   'useStack', 'index1', 'index2', 'dateFormat',
                   'date1', 'date2', 'bbox']:
             self.inputParams.pop(x, None)
@@ -400,25 +414,28 @@ class nisarImage(nisarBase2D):
             1.2 would increase by 20%). The default is 1.
         axisOff : TYPE, optional
             Turn axes off. The default is False.
-        midDate : Boolean, optional
-            Use middle date for titel. The default is True.
+        cmap : str or colormap, optional
+            Colormap. The default is 'gray'.
+        midDate : bool, optional
+            Use middle date for title. The default is True.
+        colorBar : bool, optional
+            Show a colour bar. The default is True.
         colorBarLabel : str, optional
-            Label for colorbar. The default is 'Speed (m/yr)'.
-        colorBarPosition : TYPE, optional
-            Color bar position (e.g., left, top...). The default is 'right'.
+            Label for colorbar. The default is band-appropriate
+            ('DN', '$\\sigma_o$ (dB)', or '$\\gamma_o$ (dB)').
+        colorBarPosition : str, optional
+            Color bar position (e.g., 'left', 'top'). The default is 'right'.
         colorBarSize : str, optional
-            Color bar size specfied as 'n%'. The default is '5%'.
+            Color bar size specified as 'n%'. The default is '5%'.
         colorBarPad : float, optional
-            Color bar pad. The default is 0.05.
+            Color bar padding. The default is 0.05.
         wrap : float, optional
             Display data modulo wrap. The default is None.
         extend : str, optional
-            Colorbar extend ('both','min', 'max', 'neither').
+            Colorbar extend ('both', 'min', 'max', 'neither').
             The default is None.
         backgroundColor : color, optional
             Background color. The default is (1, 1, 1).
-        wrap :  number, optional
-             Display velocity modululo wrap value
         masked : Boolean, optional
             Masked for imshow. The default is None.
         **kwargs : dict
@@ -510,14 +527,19 @@ class nisarImage(nisarBase2D):
         *argv : list
             Additional args to pass to plt.plot (e.g. 'r*').
         band : str, optional
-            band name (image, sigma0, gamma0). The default is 1st band loaded.
+            Band name (image, sigma0, gamma0). The default is the 1st loaded band.
         ax : axis, optional
-            matplotlib axes. The default is None.
+            Matplotlib axes. The default is None.
+        midDate : bool, optional
+            Use the mid-date (True) or date range (False) for the plot title.
+            The default is True.
         distance : nparray, optional
-            distance variable for plot.
-            The default is None, which causes it to be calculated.
+            Pre-computed distance array for the x-axis.
+            The default is None (calculated from x, y).
+        units : str, optional
+            Coordinate units ('m' or 'km'). The default is 'm'.
         **kwargs : dict
-            kwargs pass through to plt.plot.
+            Kwargs passed through to plt.plot.
 
         Returns
         -------
@@ -541,38 +563,38 @@ class nisarImage(nisarBase2D):
         Parameters
         ----------
         ax : axis
-            matplotlib axes. The default is None.
+            matplotlib axes.
         band : str, optional
-            band name (vx, vy, vv). The default is 'vv'.
-        xLabel : tr, optional
-            x-axis label. The default is 'Distance', use '' to disable.
-        yLabel : tr, optional
-            x-axis label. The default is band appropriate (e.g, Speed),
-            use '' to disable.
+            Band name ('image', 'sigma0', 'gamma0'). The default is the first
+            loaded band.
+        xLabel : str, optional
+            x-axis label. The default is 'Distance (units)'; use '' to
+            disable.
+        yLabel : str, optional
+            y-axis label. The default is band-appropriate (DN / dB); use ''
+            to disable.
         units : str, optional
-            Units (m or km) for the x, y coordinates. The default is 'm'
+            Units (m or km) for the x, y coordinates. The default is 'm'.
         title : str, optional
-            Plot titel. The default is None.
+            Plot title. The default is None.
         labelFontSize : int, optional
             Font size for x&y labels. The default is 15.
         titleFontSize : int, optional
-            Fontsize for plot title The default is 16.
+            Font size for plot title. The default is 16.
         plotFontSize : int, optional
             Font size for tick labels. The default is 13.
         fontScale : float, optional
-            Scale factor to apply to label, title, and plot fontsizes.
-            The default is 1.
-        axisOff : Boolean, optional
-            Set to True to turn axis off. The default is False.
+            Scale factor applied to all font sizes. The default is 1.
+        axisOff : bool, optional
+            Turn axes off. The default is False.
 
         Returns
         -------
         None.
-
         '''
         if band not in self.variables:
             band = self.variables[0]
-        imageLabels = {'image': 'DN value', 'gamma0': '$\\gammma_o$ (dB)',
+        imageLabels = {'image': 'DN value', 'gamma0': '$\\gamma_o$ (dB)',
                        'sigma0': '$\\sigma_o$ (dB)'}
         if xLabel is None:
             xLabel = f'Distance ({units})'
@@ -593,46 +615,46 @@ class nisarImage(nisarBase2D):
                        labelFontSize=15, titleFontSize=16, plotFontSize=13,
                        fontScale=1, axisOff=False):
         '''
-        Label a profile plot
+        Label a point-vs-time plot produced by plotPoint.
 
         Parameters
         ----------
         ax : axis
-            matplotlib axes. The default is None.
+            matplotlib axes.
         band : str, optional
-            band name (vx, vy, vv). The default is 'vv'.
-        xLabel : tr, optional
-            x-axis label. The default is 'Distance', use '' to disable.
-        yLabel : tr, optional
-            x-axis label. The default is band appropriate (e.g, Speed),
-            use '' to disable.
+            Band name ('image', 'sigma0', 'gamma0'). The default is the first
+            loaded band.
+        xLabel : str, optional
+            x-axis label. The default is 'Date'; use '' to disable.
+        yLabel : str, optional
+            y-axis label. The default is band-appropriate (DN / dB); use ''
+            to disable.
         units : str, optional
-            Units (m or km) for the x, y coordinates. The default is 'm'
+            Units (m or km) for display. The default is 'm'.
         title : str, optional
             Plot title. The default is None.
         labelFontSize : int, optional
             Font size for x&y labels. The default is 15.
         titleFontSize : int, optional
-            Fontsize for plot title The default is 16.
+            Font size for plot title. The default is 16.
         plotFontSize : int, optional
             Font size for tick labels. The default is 13.
         fontScale : float, optional
-            Scale factor to apply to label, title, and plot fontsizes.
-            The default is 1.
-        axisOff : Boolean, optional
-            Set to True to turn axis off. The default is False.
+            Scale factor applied to all font sizes. The default is 1.
+        axisOff : bool, optional
+            Turn axes off. The default is False.
 
         Returns
         -------
         None.
-
         '''
         band = self.variables[0]
-        speedLabels = {'vv': 'Speed', 'vx': '$v_x$', 'vy': '$v_y$'}
+        imageLabels = {'image': 'DN value', 'gamma0': '$\\gamma_o$ (dB)',
+                       'sigma0': '$\\sigma_o$ (dB)'}
         if xLabel is None:
             xLabel = 'Date'
         if yLabel is None:
-            yLabel = speedLabels[band] + ' (m/yr)'
+            yLabel = imageLabels.get(band, band)
         #
         self._labelAxes(ax, xLabel, yLabel,
                         labelFontSize=labelFontSize,

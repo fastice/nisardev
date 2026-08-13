@@ -8,7 +8,7 @@ Created on Mon Feb 10 11:08:15 2020
 
 # geoimage.py
 import numpy as np
-from nisardev import nisarBase2D, nisarVel
+from nisardev import nisarBase2D, nisarVel, myError
 # import matplotlib.pylab as plt
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
 from osgeo import gdal
@@ -36,12 +36,19 @@ class nisarVelSeries(nisarBase2D):
 
     def __init__(self, verbose=True, epsg=None, numWorkers=3, **kwds):
         '''
-        Instantiate nisarVel object. Possible bands are 'vx', 'vy','v', 'ex',
-        'ey', 'e'
+        Instantiate nisarVelSeries object. Possible bands are 'vx', 'vy',
+        'vv', 'ex', 'ey', 'ev', 'dT'
         Parameters
         ----------
         verbose : bool, optional
             Increase level of informational messages. The default is True.
+        epsg : int, optional
+            EPSG projection code (3413 = Greenland PS, 3031 = Antarctic PS).
+            The default is None (inferred from data on read).
+        numWorkers : int, optional
+            Number of dask workers for parallel I/O. The default is 3.
+        **kwds : dict
+            Additional keyword arguments passed to nisarBase2D.__init__.
         Returns
         -------
         None.
@@ -66,13 +73,15 @@ class nisarVelSeries(nisarBase2D):
         useVelocity : bool
             Include 'vx', 'vy', and 'vv'.
         useErrors : bool
-            Include 'ex', and 'ey'.
+            Include 'ex', 'ey', and 'ev'.
+        useDT : bool
+            Include 'dT' (time interval in days).
         readSpeed : bool, optional
-            If false, don't include vv. The default is False.
+            If True, include 'vv' directly from file. The default is False.
         Returns
         -------
-        myVars : list of str
-            list of variable names as strings, e.g. ['vx',...].
+        list of str
+            List of variable names to be loaded, e.g. ['vx', 'vy', 'vv'].
         '''
         myVars = []
         if useVelocity:
@@ -127,11 +136,16 @@ class nisarVelSeries(nisarBase2D):
 
         Parameters
         ----------
-        date : datetime, or str "YYYY-MM-DD"
-            date closest to desired layer
+        date : datetime or str 'YYYY-MM-DD'
+            Date closest to the desired layer.
+        returnXR : bool, optional
+            If True, return an xarray DataArray instead of numpy arrays.
+            The default is False.
         Returns
         -------
-        vx, vy
+        list of np.ndarray + datetime, or xarray.DataArray
+            When returnXR=False: [vx, vy, ...] + [midDate].
+            When returnXR=True: xarray DataArray for the selected time.
         '''
         date = self.parseDate(date)  # Convert str to datetime if needed
         result = self.subset.sel(time=date, method='nearest')
@@ -149,6 +163,7 @@ class nisarVelSeries(nisarBase2D):
                            useVelocity=True, useErrors=False, useDT=False,
                            readSpeed=False, url=False, useStack=True,
                            index1=None, index2=None, dateFormat=None,
+                           dates=None,
                            overviewLevel=-1, suffix='',
                            chunkSize=2048,
                            subsetMode=False):
@@ -164,12 +179,12 @@ class nisarVelSeries(nisarBase2D):
         Parameters
         ----------
         fileNames : list
-            List of files should be of the form
-            [pattern.*.abc ...] or [pattern*....]
-            The wildcard (*) will be filled with the values in myVars
-            e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
-        bbox dict, optional
-            bbox to clip the product to {'minx': ...}
+            List of files, each of the form 'pattern.*.abc' or 'pattern*'.
+            The wildcard is replaced with the band name
+            (e.g., 'pattern.vx.abc.tif', 'pattern.vy.abc.tif').
+        bbox : dict, optional
+            Bounding box to clip on load: {'minx': ..., 'miny': ...,
+            'maxx': ..., 'maxy': ...}. The default is None (full extent).
         useVelocity : bool, optional
             Include velocity if True. The default is True.
         useErrors : bool, optional
@@ -183,18 +198,34 @@ class nisarVelSeries(nisarBase2D):
         useStack : Boolean, optional
             Repeat headers for quicker open. The default is True.
             The default is True.
-        index1, index2 : location of dates in filename with seperated by _
-        dateFormat : format code to strptime
-        overviewLevel: int, optional
-            Overview (pyramid) level to read: -1->full res, 0->1/2 res,
-            1->1/4 res....to image dependent max downsampling level.
-            The default is -1 (full res).
+        index1 : int or None, optional
+            0-based position of the first date token when the filename is split
+            by '_'. None → auto-detected from product type. The default is None.
+        index2 : int or None, optional
+            0-based position of the second date token. The default is None.
+        dateFormat : str or None, optional
+            strptime format for date tokens (e.g. '%d%b%y'). None → auto.
+            The default is None.
+        dates : list, or None, optional
+            Explicit date label per entry in fileNames, same order and length.
+            Each element may be:
+            - a (date1, date2) tuple where each value is a datetime or
+              'YYYY-MM-DD' string (existing behaviour); or
+            - a bare scalar: an int n (maps to 2000-01-01 + n days), a
+              datetime, or a 'YYYY-MM-DD' string, applied as both date1 and
+              date2 (convenient for index-labelled series with no real dates).
+            Bypasses filename date parsing entirely. The default is None.
+        overviewLevel : int, optional
+            Overview (pyramid) level to read: -1 → full resolution,
+            0 → 1/2 res, 1 → 1/4 res, etc. The default is -1.
         suffix : str, optional
-            Any suffix that needs to be appended (e.g., for dropbox links)
+            Suffix appended to the URL/filename (e.g. for Dropbox links).
+            The default is ''.
         chunkSize : int, optional
-            Chunksize for xarray. Default is 1024.
-        subsetMode: bool, optional
-            If true, save the result as a subset instead of xr
+            Chunk size for dask-backed xarray. The default is 2048.
+        subsetMode : bool, optional
+            If True, store the result as a subset instead of the full xr.
+            The default is False.
         Returns
         -------
         None.
@@ -203,13 +234,23 @@ class nisarVelSeries(nisarBase2D):
         self.fileNames = fileNames
         for x in ['self', 'subsetMode', 'bbox', 'fileNames']:
             self.inputParamsSeries.pop(x, None)
+        if dates is not None and len(dates) != len(fileNames):
+            myError('readSeriesFromTiff: dates must be the same length as fileNames')
         self.variables = self.myVariables(useVelocity, useErrors, useDT,
                                           readSpeed=readSpeed)
         self.velMaps = []
         #
         self.template = None
         with ProgressBar():
-            for fileName in fileNames:
+            for i, fileName in enumerate(fileNames):
+                if dates is None:
+                    date1, date2 = None, None
+                elif isinstance(dates[i], (tuple, list)):
+                    date1, date2 = dates[i]
+                else:
+                    date1 = date2 = dates[i]  # bare int/str/datetime
+                date1 = self.parseDate(date1, defaultDate=False)
+                date2 = self.parseDate(date2, defaultDate=False)
                 myVel = nisarVel(epsg=self.epsg,
                                  template=self.template,
                                  numWorkers=self.numWorkers)
@@ -222,6 +263,7 @@ class nisarVelSeries(nisarBase2D):
                                        url=url, useStack=useStack,
                                        index1=index1, index2=index2,
                                        dateFormat=dateFormat,
+                                       date1=date1, date2=date2,
                                        overviewLevel=overviewLevel,
                                        suffix=suffix, chunkSize=chunkSize)
                 self.template = myVel.template
@@ -254,6 +296,9 @@ class nisarVelSeries(nisarBase2D):
         self.time = [self.datetime64ToDatetime(x) for x in myXR.time.data]
         # Update times
         self._getTimes()
+        # Initialize geo info (sx, sy, dx, dy, etc.) from the assembled subset
+        self._mapVariables()
+        self._parseGeoInfo()
 
     def _addSpeedSeries(self, bandType='v'):
         ''' Add speed if only have vx and vy '''
@@ -307,7 +352,7 @@ class nisarVelSeries(nisarBase2D):
 
         # fix band order
         self.xr = self._setBandOrder(
-            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'ev': '5', 'dT': 5})
+            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'ev': 5, 'dT': 6})
         self.subset = self.xr
         # get times
         self._getTimes()
@@ -350,7 +395,7 @@ class nisarVelSeries(nisarBase2D):
         ----------
         bbox : dict
             {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
-        useVelocity: bool, optional
+        useVelocity : bool, optional
             compute speed from vx, vy
         Returns
         -------
@@ -364,7 +409,7 @@ class nisarVelSeries(nisarBase2D):
         ----------
         bbox : dict
             {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
-        useVelocity: bool, optional
+        useVelocity : bool, optional
             compute speed from vx, vy
         Returns
         -------
@@ -411,18 +456,20 @@ class nisarVelSeries(nisarBase2D):
                           backgroundColor=(1, 1, 1),
                           extend=None, **kwargs):
         '''
-         Use matplotlib to show a velocity layer selected by date.
-         Clip to absolute max set by maxv, though in practives percentile
-         will clip at a signficantly lower value.
+        Use matplotlib to show a velocity layer for a specified date.
+        Clips to absolute max set by vmax; percentile can further restrict the
+        display range.
 
         Parameters
         ----------
-        date : str or datetime
-            Approximate date to plot (nearest selected).
+        date : str ('YYYY-MM-DD') or datetime, optional
+            Approximate date to plot; nearest time step is selected.
+            The default is None (uses the first time step).
         ax : matplotlib axis, optional
-            axes for plot. The default is None.
+            Axes for plot. The default is None (creates a new figure).
         band : str, optional
-            component to plot (any of loaded variables). The default is 'vv'.\
+            Component to plot (any loaded variable, e.g. 'vv', 'vx', 'vy',
+            'ex', 'ey', 'dT'). The default is 'vv'.
         vmin : number, optional
             min velocity to display. The default is 0.
         vmax : number, optional
@@ -447,14 +494,16 @@ class nisarVelSeries(nisarBase2D):
             1.2 would increase by 20%). The default is 1 .
         scale : str, optional
             Scale type ('linear' or 'log') The default is 'linear'.
-        axisOff : TYPE, optional
+        axisOff : bool, optional
             Turn axes off. The default is False.
-        midDate : Boolean, optional
-            Use middle date for titel. The default is True.
+        midDate : bool, optional
+            Use middle date for title. The default is True.
+        colorBar : bool, optional
+            Show a colour bar. The default is True.
         colorBarLabel : str, optional
             Label for colorbar. The default is 'Speed (m/yr)'.
-        colorBarPosition : TYPE, optional
-            Color bar position (e.g., left, top...). The default is 'right'.
+        colorBarPosition : str, optional
+            Color bar position (e.g., 'left', 'top'). The default is 'right'.
         colorBarSize : str, optional
             Color bar size specfied as 'n%'. The default is '5%'.
         colorBarPad : float, optional
@@ -466,16 +515,14 @@ class nisarVelSeries(nisarBase2D):
             The default is None.
         backgroundColor : color, optional
             Background color. The default is (1, 1, 1).
-        wrap :  number, optional
-             Display velocity modululo wrap value
         masked : Boolean, optional
-            Masked for imshow. The default is None.
+            Mask array for imshow. The default is None.
         **kwargs : dict
-            kwargs passed to imshow.
+            Kwargs passed to imshow.
         Returns
         -------
-        pos : matplotlib.image.AxesImage
-            return value from imshow.
+        matplotlib.image.AxesImage
+            Return value from imshow.
 
         '''
         # Compute auto scale params
@@ -532,13 +579,16 @@ class nisarVelSeries(nisarBase2D):
         *argv : list
             Additional args to pass to plt.plot (e.g. 'r*').
         band : str
-            band name (vx, vy, vv). The default is 'vv'.
+            Band name (vx, vy, vv). The default is 'vv'.
         ax : axis, optional
-            matplotlib axes. The default is None.
+            Matplotlib axes. The default is None.
+        sourceEPSG : int or str, optional
+            EPSG code for x, y coordinates if they are in a different
+            projection than the data. The default is None (no reprojection).
         units : str, optional
-            Units (m or km) for the x, y coordinates. The default is 'm'
+            Units ('m' or 'km') for the x, y coordinates. The default is 'm'.
         **kwargs : dict
-            kwargs pass through to plt.plot.
+            Kwargs passed through to plt.plot.
 
         Returns
         -------
@@ -610,39 +660,37 @@ class nisarVelSeries(nisarBase2D):
                        labelFontSize=15, titleFontSize=16, plotFontSize=13,
                        fontScale=1, axisOff=False):
         '''
-        Label a profile plot
+        Label a point-vs-time plot produced by plotPoint.
 
         Parameters
         ----------
         ax : axis
-            matplotlib axes. The default is None.
+            matplotlib axes.
         band : str, optional
-            band name (vx, vy, vv). The default is 'vv'.
-        xLabel : tr, optional
-            x-axis label. The default is 'Distance', use '' to disable.
-        yLabel : tr, optional
-            x-axis label. The default is band appropriate (e.g, Speed),
-            use '' to disable.
+            Band name ('vx', 'vy', 'vv'). The default is 'vv'.
+        xLabel : str, optional
+            x-axis label. The default is 'Date'; use '' to disable.
+        yLabel : str, optional
+            y-axis label. The default is band-appropriate (e.g. 'Speed
+            (m/yr)'); use '' to disable.
         units : str, optional
-            Units (m or km) for the x, y coordinates. The default is 'm'
+            Units (m or km) for display. The default is 'm'.
         title : str, optional
             Plot title. The default is None.
         labelFontSize : int, optional
             Font size for x&y labels. The default is 15.
         titleFontSize : int, optional
-            Fontsize for plot title The default is 16.
+            Font size for plot title. The default is 16.
         plotFontSize : int, optional
             Font size for tick labels. The default is 13.
         fontScale : float, optional
-            Scale factor to apply to label, title, and plot fontsizes.
-            The default is 1.
-        axisOff : Boolean, optional
-            Set to True to turn axis off. The default is False.
+            Scale factor applied to all font sizes. The default is 1.
+        axisOff : bool, optional
+            Turn axes off. The default is False.
 
         Returns
         -------
         None.
-
         '''
         speedLabels = {'vv': 'Speed', 'vx': '$v_x$', 'vy': '$v_y$'}
         if xLabel is None:
@@ -762,10 +810,10 @@ class nisarVelSeries(nisarBase2D):
         Parameters
         ----------
         skipna : bool, optional
-            Skips nans in computation. The default is True.
-        skipna : bool, optional
-            Computes mean sq errors to represet errors of other averaged
-            variables. The default is True.
+            Skip NaNs in computation. The default is True.
+        squaredErrors : bool, optional
+            Compute root-mean-square errors for error bands (ex, ey, ev)
+            rather than a simple mean. The default is True.
         Returns
         -------
         same as class method called from

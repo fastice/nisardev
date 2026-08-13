@@ -74,7 +74,7 @@ def setKey(myKey, defaultValue, **kwargs):
 
     '''
     if myKey in kwargs.keys():
-        return kwargs(myKey)
+        return kwargs[myKey]
     return defaultValue
 
 
@@ -141,11 +141,8 @@ def parseDatesFromName(dirName, dateTemplate, divider):
         First and last dates from meta file.
     '''
     dates = []
-    print(dirName, divider)
     for dN, dT in zip(dirName.split(divider), dateTemplate.split(divider)):
-        print(dN, dT)
         if '%' in dT:
-            print(datetime.strptime(dN, dT))
             dates.append(datetime.strptime(dN, dT))
     if len(dates) != 2:
         myError(f'parseDatesFromDirName: could not parse dates from {dirName}')

@@ -15,7 +15,6 @@ from datetime import datetime, timedelta
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
 from osgeo import gdal
 import xarray as xr
-import warnings
 
 
 class nisarVel(nisarBase2D):
@@ -34,32 +33,24 @@ class nisarVel(nisarBase2D):
     legendFontSize = 12  # Font size for legends
     titleFontSize = 15  # Font size for legends
 
-    def __init__(self, verbose=True, epsg=None, template=None, **kwds):
+    def __init__(self, verbose=True):
         '''
-        Instantiate nisarVel object. Possible bands are 'vx', 'vy', 'vv',
-        'ex', 'ey', 'ev', 'dT'
+        Instantiate nisarVel object. Possible bands are 'vx', 'vy','v', 'ex',
+        'ey', 'e'
         Parameters
         ----------
         verbose : bool, optional
             Increase level of informational messages. The default is True.
-        epsg : int, optional
-            EPSG projection code (3413 = Greenland PS, 3031 = Antarctic PS).
-            The default is None (inferred from data on read).
-        template : dict, optional
-            Cached rasterio metadata template for lazy/repeated reads.
-            The default is None.
-        **kwds : dict
-            Additional keyword arguments passed to nisarBase2D.__init__.
         Returns
         -------
         None.
         '''
-        super().__init__(epsg=epsg, template=template, **kwds)
+        nisarBase2D.__init__(self)
         self.vx, self.vy, self.vv, self.ex, self.ey, self.dT = [None] * 6
         self.variables = None
         self.verbose = verbose
         self.noDataDict = {'vx': -2.0e9, 'vy': -2.0e9, 'vv': -1.0,
-                           'ex': -1.0, 'ey': -1.0, 'ev': -1.0, 'dT': -2.e9}
+                           'ex': -1.0, 'ey': -1.0, 'dT': -2.e9}
         self.gdalType = gdal.GDT_Float32  # data type for velocity products
         self.dtype = 'float32'
 
@@ -72,16 +63,13 @@ class nisarVel(nisarBase2D):
         useVelocity : bool
             Include 'vx', 'vy', and 'vv'.
         useErrors : bool
-            Include 'ex', 'ey', and 'ev'.
-        useDT : bool
-            Include 'dT' (time interval in days).
+            Include 'ex', and 'ey'.
         readSpeed : bool, optional
-            If True, include 'vv' directly from file instead of computing it.
-            The default is False.
+            If false, don't include vv. The default is False.
         Returns
         -------
-        list of str
-            List of variable names to be loaded, e.g. ['vx', 'vy', 'vv'].
+        myVars : list of str
+            list of variable names as strings, e.g. ['vx',...].
         '''
         myVars = []
         if useVelocity:
@@ -95,10 +83,6 @@ class nisarVel(nisarBase2D):
         self.variables = myVars
         return myVars
 
-    @classmethod
-    def reproduce(cls):
-        ''' Create and return a new instance of velocitySeries '''
-        return cls()
     # ------------------------------------------------------------------------
     # Interpolation routines - to populate abstract methods from nisarBase2D
     # ------------------------------------------------------------------------
@@ -111,13 +95,13 @@ class nisarVel(nisarBase2D):
         Parameters
         ----------
         x : nparray
-            x coordinates in metres (polar stereographic).
+            DESCRIPTION.
         y : nparray
-            y coordinates in metres (polar stereographic).
+            DESCRIPTION.
         Returns
         -------
         npArray
-            Interpolated results with shape [nbands, npts].
+            interpolate results for [nbands, npts].
         '''
         return self.interpGeo(x, y, self.variables, **kwargs)
 
@@ -125,64 +109,34 @@ class nisarVel(nisarBase2D):
     # I/O Routines
     # ------------------------------------------------------------------------
 
-    def _addSpeed(self, bandType='v', subset=False):
+    def _addSpeed(self):
         ''' Add speed if only have vx and vy '''
         # Compute speed
-        band = f'{bandType}v'
-        #
-        if subset:
-            myXR = self.subset
-        else:
-            myXR = self.xr
-        #
-        if bandType == 'v':
-            wx, wy = 1., 1.,
-        elif bandType == 'e':
-            wx = np.squeeze(myXR.sel(band='vx') / myXR.sel(band='vv')).data
-            wy = np.squeeze(myXR.sel(band='vy') / myXR.sel(band='vv')).data
-        else:
-            print('_addSpeed: Invalid band type')
-        #
-        data = np.sqrt(np.square(wx * getattr(self, f'{bandType}x')) +
-                       np.square(wy * getattr(self, f'{bandType}y')))
-        dv = xr.DataArray(data,
-                          coords=[myXR.y, myXR.x], dims=['y', 'x'])
+        dv = xr.DataArray(np.sqrt(np.square(self.vx) + np.square(self.vy)),
+                          coords=[self.xr.y, self.xr.x], dims=['y', 'x'])
         # setup band as vv
         dv = dv.expand_dims(dim=['time', 'band'])
-        dv['band'] = [band]
+        dv['band'] = ['vv']
         dv['time'] = self.xr['time']
         dv['name'] = self.xr['name']
-        #   dv['_FillValue'] = self.noDataDict[band]
-        dv = dv.assign_coords(_FillValue=("band",
-                                          np.array([self.noDataDict[band]])))
+        dv['_FillValue'] = self.noDataDict['vv']
         # Add to existing xr with vx and vy
-        myXR = xr.concat([myXR, dv],
-                         dim='band',
-                         join='override',
-                         combine_attrs='drop',
-                         compat='override',
-                         coords='minimal')
+        self.xr = xr.concat([self.xr, dv], dim='band', join='override',
+                            combine_attrs='drop')
         # Fix order of coordinates - force vx, vy, vv, ex...
-        myXR = self._setBandOrder({'vx': 0, 'vy': 1, 'vv': 2,
-                                   'ex': 3, 'ey': 4, 'ev': 5, 'dT': 6},
-                                  myXR=myXR)
+        self.xr = self._setBandOrder(
+            {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'dT': 5})
         #
-        if subset:
-            self.subset = myXR
-        else:
-            self.xr = myXR
-        #
-        if band not in self.variables:
-            self.variables.append(band)
+        if 'vv' not in self.variables:
+            self.variables.append('vv')
         self._mapVariables()
 
-    def readDataFromTiff(self, fileNameBase, bbox=None, useVelocity=True,
-                         useErrors=False,
+    def readDataFromTiff(self, fileNameBase, useVelocity=True, useErrors=False,
                          useDT=False,
                          readSpeed=False, url=False, useStack=True,
                          index1=4, index2=5, dateFormat='%d%b%y',
                          overviewLevel=-1, masked=True, suffix='',
-                         date1=None, date2=None, chunkSize=2048):
+                         date1=None, date2=None, chunkSize=1024):
         '''
         read in a tiff product fileNameBase.*.tif. If
         useVelocity=True read velocity (e.g, fileNameBase.vx(vy).tif)
@@ -198,8 +152,6 @@ class nisarVel(nisarBase2D):
             FileNameBase should be of the form
             pattern.*.abc or pattern*.
             The wildcard (*) will be filled with the values in myVars
-        bbox dict, optional
-            bbox to clip the product to {'minx': ...}
             e.g.,pattern.vx.abc.tif, pattern.vy.abc.tif.
         useVelocity : bool, optional
             Include velocity if True. The default is True.
@@ -212,22 +164,13 @@ class nisarVel(nisarBase2D):
         url : bool, optional
             Read data from url
         useStack : boolean, optional
-            Use template-based lazy open for faster repeated reads.
-            The default is True.
-        index1, index2 : int
-            Position (0-based) of the date tokens in the filename when split
-            by '_'.
-        dateFormat : str
-            strptime format string for the date tokens.
+            Uses stackstac for full resolution data. The default is True.
+        index1, index2 : location of dates in filename with seperated by _
+            dateFormat : format code to strptime
         overviewLevel: int, optional
-            Overview (pyramid) level to read: -1->full res, 0->1/2 res,
+            Overview (pyramid) level to read: None->full res, 0->1/2 res,
             1->1/4 res....to image dependent max downsampling level.
             The default is -1 (full res).
-        masked : bool, optional
-            Open with masked array support. The default is True.
-        suffix : str, optional
-            Any suffix to append to the URL/filename (e.g., for Dropbox
-            links). The default is ''.
         date1 : datetime
             First date. The defaults is None (extract from filename)
         date2 : datetime
@@ -238,9 +181,6 @@ class nisarVel(nisarBase2D):
         -------
         None.
         '''
-        self.readSpeed = readSpeed
-        self.useErrors = useErrors
-        self.useVelocity = useVelocity
         self.parseVelDatesFromFileName(fileNameBase, index1=index1,
                                        index2=index2, dateFormat=dateFormat,
                                        date1=date1, date2=date2)
@@ -250,37 +190,19 @@ class nisarVel(nisarBase2D):
             skip = []
         else:
             skip = ['vv']  # Force skip
-        # save parameters for other routines, removing unneeded items.
-        self.inputParams = locals()
-        for x in ['self', 'fileNameBase', 'useDT',
-                  'readSpeed', 'useVelocity', 'useErrors',
-                  'useStack', 'index1', 'index2', 'dateFormat',
-                  'date1', 'date2', 'bbox']:
-            self.inputParams.pop(x, None)
-        #
-        self.readXR(fileNameBase,
-                    bbox=bbox,
-                    url=url,
-                    masked=True,
-                    useStack=useStack,
-                    time=self.midDate,
-                    skip=skip,
-                    time1=self.date1,
-                    time2=self.date2,
-                    overviewLevel=overviewLevel,
-                    suffix=suffix,
-                    chunkSize=chunkSize)
+        self.readXR(fileNameBase, url=url, masked=True, useStack=useStack,
+                    time=self.midDate, skip=skip, time1=self.date1,
+                    time2=self.date2, overviewLevel=overviewLevel,
+                    suffix=suffix, chunkSize=chunkSize)
         # compute speed rather than download
         if not readSpeed and useVelocity:
-            self._addSpeed(bandType='v')
-            # self.subSetData(self.boundingBox(units='m'))
-        if useErrors:
-            self._addSpeed(bandType='e')
+            self._addSpeed()
         #
         self.xr = self.xr.rename('VelocityMap')
         self.fileNameBase = fileNameBase  # save filenameBase
         # force intial subset to entire image
-        self._subsetData(self.boundingBox(units='m'))
+        # print(self.boundingBox(units='m'))
+        self.subSetData(self.boundingBox(units='m'))
 
     def readDataFromNetCDF(self, cdfFile):
         '''
@@ -303,75 +225,28 @@ class nisarVel(nisarBase2D):
             self._addSpeed()
             self.subset = self.xr
         self.xr = self._setBandOrder(
-             {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'ev': 5, 'dT': 6})
+             {'vx': 0, 'vy': 1, 'vv': 2, 'ex': 3, 'ey': 4, 'dT': 5})
         self.subset = self.xr
         # set times
         self.time = [np.datetime64(self.xr.time.item(), 'ns')]
         self.time1 = [np.datetime64(self.xr.time1.item(), 'ns')]
         self.time2 = [np.datetime64(self.xr.time2.item(), 'ns')]
 
-    def subSetData(self, bbox, useVelocity=True):
-        warnings.warn('\nsubSetData deprecated. Use subsetData',
-                      category=DeprecationWarning,
-                      stacklevel=2)
-        self.subsetVel(bbox, useVelocity=useVelocity)
-
     def subSetVel(self, bbox, useVelocity=True):
-        warnings.warn('\nsubSetVel deprecated. Use subsetVel',
-                      category=DeprecationWarning,
-                      stacklevel=2)
-        #
-        self.subsetVel(bbox, useVelocity=useVelocity)
-
-    def subsetData(self, bbox, useVelocity=True):
         ''' Subset dataArray to a bounding box
         Parameters
         ----------
         bbox : dict
             {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
-        useVelocity : bool, optional
+        useVelocity: bool, optional
             compute speed from vx, vy
         Returns
         -------
         None.
         '''
-        self.subsetVel(bbox, useVelocity=useVelocity)
-
-    def subsetVel(self, bbox, useVelocity=True):
-        ''' Subset dataArray to a bounding box
-        Parameters
-        ----------
-        bbox : dict
-            {'minx': minx, 'miny': miny, 'maxx': maxx, 'maxy': maxy}
-        useVelocity : bool, optional
-            compute speed from vx, vy
-        Returns
-        -------
-        None.
-        '''
-        # if a template exists, subset by rebuilding subset from scratch
-        if self.template is not None:
-            subset = self._lazyOpenProduct(self.fileNameBase,
-                                           bbox=bbox,
-                                           time=self.midDate,
-                                           **self.inputParams)
-            #
-            subset['time1'] = self.subset['time1'].data
-            subset['time2'] = self.subset['time2'].data
-            #
-            self.subset = subset
-            self._mapVariables()
-            if not self.readSpeed and self.useVelocity:
-                self._addSpeed(bandType='v', subset=True)
-            if self.useErrors:
-                self._addSpeed(bandType='e', subset=True)
-            #
-            self._mapVariables()
-            self._parseGeoInfo()
-            #
-        else:
-            # using rioxarray, so use clipbox method
-            self._subsetData(bbox)
+        self.subSetData(bbox)
+        if useVelocity:
+            self.vv = np.sqrt(np.square(self.vx) + np.square(self.vy))
 
     # ------------------------------------------------------------------------
     # Dates routines.
@@ -469,9 +344,8 @@ class nisarVel(nisarBase2D):
             if index2 is not None:
                 self.date2 = datetime.strptime(baseNamePieces[index2],
                                                dateFormat)
-        elif date2 is not None:
-            self.date2 = date2
         else:
+            # assume monthly
             tmp = self.date1 + timedelta(days=32)
             self.date2 = tmp - timedelta(days=tmp.day)
         self.midDate = self.date1 + (self.date2 - self.date1) * 0.5
@@ -517,14 +391,16 @@ class nisarVel(nisarBase2D):
 
         Parameters
         ----------
+        date : str or datetime
+            Approximate date to plot (nearest selected).
         ax : matplotlib axis, optional
-            Axes for plot. The default is None (creates a new figure).
+            axes for plot. The default is None.
         band : str, optional
-            Component to plot (any loaded variable). The default is 'vv'.
+            component to plot (any of loaded variables). The default is 'vv'.\
         vmin : number, optional
-            Min velocity to display. The default is 0.
+            min velocity to display. The default is 0.
         vmax : number, optional
-            Max velocity to display. The default is 7000.
+            max velocity to display. The default is 7000.
         percentile : number, optional
             percentile to clip display at. The default is 100
         autoScale : bool, optional
@@ -548,12 +424,10 @@ class nisarVel(nisarBase2D):
         axisOff : TYPE, optional
             Turn axes off. The default is False.
         midDate : Boolean, optional
-            Use middle date for title. The default is True.
-        colorBar : bool, optional
-            Show a colour bar. The default is True.
+            Use middle date for titel. The default is True.
         colorBarLabel : str, optional
             Label for colorbar. The default is 'Speed (m/yr)'.
-        colorBarPosition : str, optional
+        colorBarPosition : TYPE, optional
             Color bar position (e.g., left, top...). The default is 'right'.
         colorBarSize : str, optional
             Color bar size specfied as 'n%'. The default is '5%'.
@@ -562,10 +436,12 @@ class nisarVel(nisarBase2D):
         wrap : float, optional
             Display data modulo wrap. The default is None.
         extend : str, optional
-            Colorbar extend ('both', 'min', 'max', 'neither').
+            Colorbar extend ('both','min', 'max', 'neither').
             The default is None.
         backgroundColor : color, optional
             Background color. The default is (1, 1, 1).
+        wrap :  number, optional
+             Display velocity modululo wrap value
         masked : Boolean, optional
             Masked for imshow. The default is None.
         **kwargs : dict
@@ -654,19 +530,14 @@ class nisarVel(nisarBase2D):
         *argv : list
             Additional args to pass to plt.plot (e.g. 'r*').
         band : str, optional
-            Band name (vx, vy, vv). The default is 'vv'.
+            band name (vx, vy, vv). The default is 'vv'.
         ax : axis, optional
-            Matplotlib axes. The default is None.
-        midDate : bool, optional
-            Use the mid-date (True) or date range (False) for the plot title.
-            The default is True.
+            matplotlib axes. The default is None.
         distance : nparray, optional
-            Pre-computed distance array for the x-axis.
-            The default is None (calculated from x, y).
-        units : str, optional
-            Coordinate units ('m' or 'km'). The default is 'm'.
+            distance variable for plot.
+            The default is None, which causes it to be calculated.
         **kwargs : dict
-            Kwargs passed through to plt.plot.
+            kwargs pass through to plt.plot.
 
         Returns
         -------
@@ -738,37 +609,39 @@ class nisarVel(nisarBase2D):
                        labelFontSize=15, titleFontSize=16, plotFontSize=13,
                        fontScale=1, axisOff=False):
         '''
-        Label a point-vs-time plot produced by plotPoint.
+        Label a profile plot
 
         Parameters
         ----------
         ax : axis
-            matplotlib axes.
+            matplotlib axes. The default is None.
         band : str, optional
-            Band name ('vx', 'vy', 'vv'). The default is 'vv'.
-        xLabel : str, optional
-            x-axis label. The default is 'Date'; use '' to disable.
-        yLabel : str, optional
-            y-axis label. The default is band-appropriate (e.g. 'Speed
-            (m/yr)'); use '' to disable.
+            band name (vx, vy, vv). The default is 'vv'.
+        xLabel : tr, optional
+            x-axis label. The default is 'Distance', use '' to disable.
+        yLabel : tr, optional
+            x-axis label. The default is band appropriate (e.g, Speed),
+            use '' to disable.
         units : str, optional
-            Units (m or km) for display. The default is 'm'.
+            Units (m or km) for the x, y coordinates. The default is 'm'
         title : str, optional
             Plot title. The default is None.
         labelFontSize : int, optional
             Font size for x&y labels. The default is 15.
         titleFontSize : int, optional
-            Font size for plot title. The default is 16.
+            Fontsize for plot title The default is 16.
         plotFontSize : int, optional
             Font size for tick labels. The default is 13.
         fontScale : float, optional
-            Scale factor applied to all font sizes. The default is 1.
-        axisOff : bool, optional
-            Turn axes off. The default is False.
+            Scale factor to apply to label, title, and plot fontsizes.
+            The default is 1.
+        axisOff : Boolean, optional
+            Set to True to turn axis off. The default is False.
 
         Returns
         -------
         None.
+
         '''
         speedLabels = {'vv': 'Speed', 'vx': '$v_x$', 'vy': '$v_y$'}
         if xLabel is None:
