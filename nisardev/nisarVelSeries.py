@@ -75,7 +75,9 @@ class nisarVelSeries(nisarBase2D):
         useErrors : bool
             Include 'ex', 'ey', and 'ev'.
         useDT : bool
-            Include 'dT' (time interval in days).
+            Include 'dT' (days). Signed offset of the data's precision-weighted
+            mean date from the product's nominal centre date; negative = early.
+            NOT a time interval or duration.
         readSpeed : bool, optional
             If True, include 'vv' directly from file. The default is False.
         Returns
@@ -190,7 +192,11 @@ class nisarVelSeries(nisarBase2D):
         useErrors : bool, optional
             Include errors if True. The default is False.
         useDT : bool, optional
-            Include dT (see GrIMP documentation). The default is False.
+            Include 'dT' (days), the signed offset of the data's
+            precision-weighted mean date from the product's nominal centre date
+            (negative = skewed early). It is NOT a time interval or duration.
+            Only written when the mosaic was built with -timeOverlap.
+            The default is False.
         readSpeed : bool, optional
             Read speed (.vv) if True. The default is False.
         url : bool, optional
