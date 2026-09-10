@@ -42,6 +42,10 @@ Notes:
 
 ## Release Notes
 
+**0.0.12  2026-09-10**  Fixed nodata handling with rasterio >= 1.5: boundless window reads with a
+                    fill value no longer mask the file's nodata, so -2e9 sentinels leaked into
+                    velocity series (saturated flowline/point plots). Nodata is now masked explicitly.
+
 **0.0.11  2026-09-10**  Fixed `displayVel` on matplotlib >= 3.11 (`cm.get_cmap` removed) and made
                     `inspect()` self-contained (`hvplot.xarray` is now imported by nisardev).
                     Added `environment.yml` (adds `rio-stac`, required by `grimpfunc`).

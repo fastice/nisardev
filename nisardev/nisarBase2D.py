@@ -577,6 +577,11 @@ class nisarBase2D():
                 fill = 0 if self.template['dtype'] == 'uint8' else np.nan
                 data = src.read(window=window, masked=masked,
                                 boundless=True, fill_value=fill)
+                # rasterio >= 1.5: a boundless read with fill_value no
+                # longer masks src.nodata, so mask it explicitly.
+                if masked and src.nodata is not None and \
+                        not np.isnan(src.nodata):
+                    data = np.ma.masked_equal(data, src.nodata)
                 data = data.filled(fill)
             return data
         #
