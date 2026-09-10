@@ -20,6 +20,7 @@ from matplotlib import colors
 from datetime import datetime, timedelta
 import holoviews as hv
 import panel as pn
+import hvplot.xarray  # registers the .hvplot accessor used by inspect()
 from affine import Affine
 import rasterio
 # from dask.diagnostics import ProgressBar
@@ -1288,7 +1289,7 @@ class nisarBase2D():
             return norm, cmap
         # Pass back colormap for linear case
         elif scale == 'linear':
-            cmap = plt.cm.get_cmap(cmap)
+            cmap = plt.get_cmap(cmap)  # cm.get_cmap removed in matplotlib 3.11
             cmap.set_bad(color=backgroundColor)
             return colors.Normalize(vmin=vmin, vmax=vmax), cmap
         print('Invalid scale mode. Choices are "linear" and "log"')

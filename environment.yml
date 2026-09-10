@@ -1,0 +1,36 @@
+# Environment file for nisardev (mirrors GrIMPNotebooks/binder/environment.yml; keep in sync)
+name: nisardev
+#
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - blosc
+  - curl
+  - dask
+  - datashader
+  - fsspec
+  - gdal
+  - geoviews  
+  - geopandas
+  - holoviews
+  - hvplot
+  - jupyter-panel-proxy
+  - jupyterlab
+  - nbgitpuller
+  - panel
+  - param
+  - pip
+  - progressbar2
+  - qgis
+  - rasterio
+  - rioxarray
+  - rio-stac
+  - stackstac
+  - tiledb
+  - pip:
+    - git+https://github.com/fastice/grimpfunc.git@master
+    - git+https://github.com/fastice/grimpqgis.git@master
+    - git+https://github.com/fastice/nisardev.git@main
+    
+    
