@@ -29,6 +29,33 @@ from bokeh.models.formatters import DatetimeTickFormatter
 from dask import delayed
 from rasterio.windows import Window
 import copy
+from time import sleep
+
+# Remote reads (/vsicurl, e.g. NSIDC). NSIDC refuses requests when too many arrive at once: rasterio
+# then reports the file as "not recognized as a supported dataset name" (no HTTP code) and the service
+# stays unavailable for a while. So each file's tile ranges are fetched one at a time (GDAL otherwise
+# sends them in parallel, even with one dask worker), and a refused open or read is retried after
+# these pauses (seconds) before giving up. Local files are never retried.
+remoteGDALOptions = {'GDAL_HTTP_MULTIRANGE': 'SERIAL'}
+remoteRetryDelays = [10, 30, 60, 120, 300]
+
+
+def _remoteRetry(path, func):
+    '''
+    Call func() (which opens and reads path), retrying remote paths after the pauses in
+    remoteRetryDelays when the server refuses the request.
+    '''
+    remote = path.startswith('/vsicurl')
+    for attempt in range(len(remoteRetryDelays) + 1):
+        try:
+            with rasterio.Env(**(remoteGDALOptions if remote else {})):
+                return func()
+        except rasterio.errors.RasterioIOError as err:
+            if not remote or attempt == len(remoteRetryDelays):
+                raise
+            delay = remoteRetryDelays[attempt]
+            print(f'Read refused ({str(err)[:80]}...); retrying in {delay} s')
+            sleep(delay)
 overviewLevels = dict(zip(range(-1, 10), 2**np.arange(0, 11)))
 
 
@@ -456,6 +483,22 @@ class nisarBase2D():
                       width=width, height=height)
 
     def _createTemplate(self, bandTiff, bbox=None, overviewLevel=-1):
+        _remoteRetry(bandTiff, lambda: self._fillTemplate(bandTiff, bbox, overviewLevel))
+
+    def _checkTemplateGrid(self, src, path):
+        '''
+        Products read with a shared template must have the template's grid; one that differs would
+        be silently misplaced by the window and the coordinate-overriding concat.
+        '''
+        t = self.template
+        if (src.width, src.height) != (t['nx'], t['ny']) or \
+                not src.transform.almost_equals(t['transform']):
+            raise ValueError(f'{path}: grid {src.width}x{src.height} at '
+                             f'({src.transform.c}, {src.transform.f}) differs from the first '
+                             f"product's {t['nx']}x{t['ny']} at ({t['transform'].c}, "
+                             f"{t['transform'].f}); read products on different grids separately")
+
+    def _fillTemplate(self, bandTiff, bbox=None, overviewLevel=-1):
         self.template = {}
         with rasterio.open(bandTiff, overview_level=overviewLevel) as src:
             self.template['ny'], self.template['nx'] = src.height, src.width
@@ -479,6 +522,9 @@ class nisarBase2D():
         """
         Create a lazy DataArray that only reads the bbox when computed that
         is chunked
+
+        POTENTIALLY DEAD CODE (2026-11-19): nothing calls this; the template path uses
+        _lazy_window_readNoChunks. Left in place for now.
         """
         height = self.template['ny']
         width = self.template['nx']
@@ -573,17 +619,19 @@ class nisarBase2D():
         # delayed function to read the window
 
         def _read_window(path, window, overviewLevel=-1, masked=True):
-            with rasterio.open(path, overview_level=overviewLevel) as src:
-                fill = 0 if self.template['dtype'] == 'uint8' else np.nan
-                data = src.read(window=window, masked=masked,
-                                boundless=True, fill_value=fill)
-                # rasterio >= 1.5: a boundless read with fill_value no
-                # longer masks src.nodata, so mask it explicitly.
-                if masked and src.nodata is not None and \
-                        not np.isnan(src.nodata):
-                    data = np.ma.masked_equal(data, src.nodata)
-                data = data.filled(fill)
-            return data
+            def read():
+                with rasterio.open(path, overview_level=overviewLevel) as src:
+                    self._checkTemplateGrid(src, path)
+                    fill = 0 if self.template['dtype'] == 'uint8' else np.nan
+                    data = src.read(window=window, masked=masked,
+                                    boundless=True, fill_value=fill)
+                    # rasterio >= 1.5: a boundless read with fill_value no
+                    # longer masks src.nodata, so mask it explicitly.
+                    if masked and src.nodata is not None and \
+                            not np.isnan(src.nodata):
+                        data = np.ma.masked_equal(data, src.nodata)
+                    return data.filled(fill)
+            return _remoteRetry(path, read)
         #
         lazy_arr = dask.array.from_delayed(
             delayed(_read_window)(path, window, overviewLevel),
